@@ -11,10 +11,11 @@ Run with:
 """
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import click
+from git import Optional
 import mlflow
 import pandas as pd
 from dotenv import load_dotenv
@@ -31,15 +32,36 @@ DATA_PATH = Path("data/ai4i2020.csv")
 # Q: If you run XGBoost today and a Random Forest next week, what changes between
 #    the two runs? Make a list. Now ask: which of those things belong in code,
 #    and which belong in a config object that you can swap out?
-#
+#     
+#    - Model type, - belongs to config object (e.g. "xgboost" vs "random_forest") 
+#    - Hyperparameters, -  config object 
+#    - Feature list,       
+#    - Target type (binary vs multiclass),
+
 # Q: MLflow groups runs under "experiments". If you have binary classification
 #    runs and multiclass runs in the same experiment, what problem does that
 #    create in the UI? What naming scheme would keep things navigable?
 #    One convention: "{project}/{model_family}/{target_type}"
 #    e.g. "predictive-maintenance/xgboost/binary"
+#    e.g. "predictive-maintenance/GBoost/multiclass"
+#
+# Q: What is an experiment vs what is a run in MLflow? Which one do you want to link to a registered model in the registry, and why?
+#
+# Experiment: A blog post 
+# Run: A heading in the blog post that breaks the article into sections.
+#
+# Registered model: Versioned model that can be linked to a run. You want to link a registered model to a run because it 
+# allows you to track the performance and parameters of the model that was registered, making it easier to reproduce 
+# and compare different versions of the model.
 #
 # Q: What is the difference between an experiment name and a registered model
 #    name in MLflow? Do they have to match?
+# 
+# Experiment name: A label for grouping related runs in MLflow. It is used to organize 
+# and categorize runs based on the experiment they belong to.
+#
+# Registered model on the hand is a model that is registered with MLflow complete with hyperparameters, eval. metrics and other config settings. 
+# This enables greater reproducibility since variables remain the same. 
 #
 # Q: What fields does a config object need so that configure_mlflow() and
 #    log_model() below require zero hardcoded strings?
@@ -48,6 +70,13 @@ DATA_PATH = Path("data/ai4i2020.csv")
 class ExperimentConfig:
     experiment_name: str       # shown in the MLflow UI — think about namespacing
     registered_model_name: str # name under which the model is versioned in the registry
+    model_family: str # name of the type of model
+    target_type: str # binary vs multiclass
+    description: str = ""                    # optional, defaults to empty string
+    notes: Optional[str] = None              # optional, explicitly nullable
+    tags: dict = field(default_factory=dict) # optional, mutable default
+
+
     # TODO: what other fields would make this config self-contained?
     #       Think about: model family label, target type, description...
 
@@ -56,33 +85,84 @@ class ExperimentConfig:
 #    family) without changing any of the functions below?
 #    What is the minimum edit required?
 
+# TBD — adding external yaml config file similar to how .env works?
+
 EXPERIMENTS: dict[str, ExperimentConfig] = {
     "xgb_binary": ExperimentConfig(
         # TODO: choose an experiment_name that follows a clear convention
-        experiment_name="",
+        experiment_name="predictive-maintenance/xgboost/binary",
         # TODO: choose a registered_model_name
-        registered_model_name="",
+        registered_model_name="xgboost-binary",
         # TODO: fill in any additional fields you added above
+        model_family="xgboost",
+        target_type="binary"
     ),
+    
+    "xgb_multiclass": ExperimentConfig(
+        # TODO: choose an experiment_name that follows a clear convention
+        experiment_name="predictive-maintenance/xgboost/multiclass",
+        # TODO: choose a registered_model_name
+        registered_model_name="xgboost-multiclass",
+        # TODO: fill in any additional fields you added above
+        model_family="xgboost",
+        target_type="multiclass"
+    ),
+
     # TODO: add at least one more experiment config here
     #       e.g. "rf_binary", "xgb_multiclass", "logreg_binary"
 }
-
+ 
 
 # ── 2. Feature list ────────────────────────────────────────────────────────────
 #
 # Q: Which columns should be excluded entirely, and why?
 #    (Does UDI carry any signal? What about Product ID?)
 #
-# Q: The EDA surfaced derived features: temp_diff, power, overstrain, hdf_risk…
-#    Which ones would you include and on what grounds?
-#    What would you lose by using only the five raw sensor columns?
+#  - We drop UDI and Product ID because they do not carry any predictive signal for machine failure. 
 #
-# Q: Is "Type" useful as a feature, or only as an input to compute wear_pct?
+# Q: The EDA surfaced derived features: temp_diff, power, mechanical stress, hdf_risk…
+#    Which ones would you include and on what grounds?
+#
+#   - Power (Torque x RPM) allows us to more easily detect how failures often occur at the edges and helps us determine a "safe" operational band
+#   - Temperature difference combined with RPM (T2 - T1) allows us to better detect heat failure condition boundary
+#   - Mechanical stress (Torque x Tool wear) In plain terms: a machine running on high torque under normal conditions is fine, but a machine running high torque and running on high tool wear is
+#    under mechanical stress. This feature helps the model detect that combined hazardous condition.
+#    
+#    These are all derived features that could potentially carry predictive signal for machine failure.
+#
+#
+#    What would you lose by using only the five raw sensor columns?
+#    
+#   - A model adept at pattern recognition might be able to learn the relationships between the
+#     raw sensor columns and the target variable, but it would require more data and computational 
+#     resources to do so. By engineering derived features based on domain knowledge, we can provide the 
+#     model with more informative inputs that may lead to better performance and faster convergence during training.
 
 FEATURES = [
-    # TODO: list the column names you want to feed to the model
+    # TODO: 
+    # Air temperature [K]	Process temperature [K]	Rotational speed [rpm]	Torque [Nm]	Tool wear [min]	Machine failure	TWF	HDF	PWF	OSF	RNF
+   
+   
+   
+	Machine failure	TWF	HDF	PWF	OSF	RNF
+    
+]  
+
+
+FEATURES = [
+    "Air temperature [K]",
+    "Process temperature [K]",
+    "Rotational speed [rpm]",
+    "Torque [Nm]",
+    "Tool wear [min]",
+    "power",
+    "temp_diff",
+    "mechanical_stress"
 ]
+
+BINARY_TARGET = "Machine failure"
+
+MULTICLASS_TARGETS = ["TWF", "HDF", "PWF", "OSF", "RNF"]
 
 
 # ── 3. Preprocessing ───────────────────────────────────────────────────────────
