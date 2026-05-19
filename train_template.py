@@ -16,7 +16,12 @@ from pathlib import Path
 
 import click
 import mlflow
+from mlflow import config
+from mlflow.metrics import f1_score
+from opentelemetry import metrics
 import pandas as pd
+from sklearn import pipeline
+from sklearn.metrics import recall_score, roc_auc_score
 import xgboost as xgb
 from dotenv import load_dotenv
 from sklearn.ensemble import RandomForestClassifier
@@ -387,19 +392,13 @@ def train_model(df: pd.DataFrame, config: ExperimentConfig):
     y = df_processed[config.target]
     X = df_processed.drop(columns=[config.target])
 
-    # CHANGED: test_size was previously hardcoded to 0.2 here.
-    # Moving it to config.test_size means each experiment can declare its own
-    # split fraction (e.g. multiclass experiments with rare classes may need a
-    # smaller test set), and all split decisions are visible in one place at the top.
+    
     X_train, X_test, y_train, y_test = train_test_split(
         X, y, random_state=42, test_size=config.test_size, stratify=y
     )
 
-    # TODO: compute imbalance_ratio from y_train
-    #       formula: (number of negatives) / (number of positives)
-    #       for multiclass experiments config.classifier_factory ignores it (_),
-    #       but we still pass it through for a consistent call signature
-    imbalance_ratio = ...
+   
+    imbalance_ratio = (y_train == 0).sum() / (y_train == 1).sum()
     classifier = _build_classifier(config, imbalance_ratio)
 
     X_train_records = X_train.to_dict(orient="records")
@@ -407,7 +406,7 @@ def train_model(df: pd.DataFrame, config: ExperimentConfig):
 
     # TODO: build the pipeline — DictVectorizer vectorises the record dicts,
     #       then hands the numeric matrix to the classifier from _build_classifier
-    pipeline = make_pipeline()
+    pipeline = make_pipeline(DictVectorizer(), classifier)
 
     pipeline.fit(X_train_records, y_train)
 
@@ -418,29 +417,31 @@ def train_model(df: pd.DataFrame, config: ExperimentConfig):
     #       Hint: pipeline.predict_proba(X_test_records)[:, 1]
     #       How would you guard this so it only runs when config.target_type == "binary"?
 
-    # CHANGED: previously this was an if/else branch:
-    #   average = "binary" if config.target_type == "binary" else "macro"
-    # Moving the value into config.metric_average eliminates the branch and makes
-    # the choice explicit per experiment — a multiclass experiment could use
-    # "weighted" instead of "macro" without touching this function at all.
+    if config.target_type == "binary":
+        y_prob_test = pipeline.predict_proba(X_test_records)[:, 1]
+    else:
+        y_prob_test = None
+
+
     average = config.metric_average
 
     metrics: dict[str, float] = {
-        "f1_train":       ...,  # f1_score(y_train, y_pred_train, average=average)
-        "f1_test":        ...,  # f1_score(y_test,  y_pred_test,  average=average)
-        "precision_test": ...,  # precision_score(y_test, y_pred_test, average=average)
-        "recall_test":    ...,  # recall_score(y_test, y_pred_test, average=average)
-        # TODO: add "roc_auc_test" for binary experiments only
+        "f1_train":       f1_score(y_train, y_pred_train, average=average),
+        "f1_test":        f1_score(y_test, y_pred_test, average=average),
+        "precision_test": precision_score(y_test, y_pred_test, average=average),
+        "recall_test":    recall_score(y_test, y_pred_test, average=average),
     }
 
-    # CHANGED: params previously had model_family and target_type hardcoded as
-    # the only entries. Replacing this with classifier.get_params() means every
-    # hyperparameter the classifier was actually built with is logged automatically —
-    # no risk of the dict going stale when you change a value in the config.
-    # Add config.model_family, config.target_type, config.test_size alongside it
-    # so the MLflow params panel is fully self-contained.
+    if y_prob_test is not None:
+        metrics["roc_auc_test"] = roc_auc_score(y_test, y_prob_test)
+
+   
     # TODO: populate params — use classifier.get_params() plus the config fields above
-    params: dict[str, object] = {}
+    params: dict[str, object] = {**classifier.get_params(), **{
+        "model_family": config.model_family,
+        "target_type": config.target_type,
+        "test_size": config.test_size
+    }}
 
     return pipeline, metrics, params
 
