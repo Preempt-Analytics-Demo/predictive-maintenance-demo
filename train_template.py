@@ -387,46 +387,60 @@ def train_model(df: pd.DataFrame, config: ExperimentConfig):
     y = df_processed[config.target]
     X = df_processed.drop(columns=[config.target])
 
-    # TODO: split — consider test_size and whether to stratify
+    # CHANGED: test_size was previously hardcoded to 0.2 here.
+    # Moving it to config.test_size means each experiment can declare its own
+    # split fraction (e.g. multiclass experiments with rare classes may need a
+    # smaller test set), and all split decisions are visible in one place at the top.
     X_train, X_test, y_train, y_test = train_test_split(
         X, y, random_state=42, test_size=config.test_size, stratify=y
     )
 
-    # TODO: compute imbalance_ratio from y_train and pass it to _build_classifier
+    # TODO: compute imbalance_ratio from y_train
+    #       formula: (number of negatives) / (number of positives)
+    #       for multiclass experiments config.classifier_factory ignores it (_),
+    #       but we still pass it through for a consistent call signature
     imbalance_ratio = ...
     classifier = _build_classifier(config, imbalance_ratio)
 
     X_train_records = X_train.to_dict(orient="records")
     X_test_records = X_test.to_dict(orient="records")
 
-    # TODO: build the pipeline using DictVectorizer and the classifier above
+    # TODO: build the pipeline — DictVectorizer vectorises the record dicts,
+    #       then hands the numeric matrix to the classifier from _build_classifier
     pipeline = make_pipeline()
 
     pipeline.fit(X_train_records, y_train)
 
     y_pred_train = pipeline.predict(X_train_records)
     y_pred_test = pipeline.predict(X_test_records)
-    # TODO: compute y_prob_test if you need ROC-AUC (binary only)
 
-    # TODO: set average from config so this line needs no if/else
-    average = ...
+    # TODO: for binary experiments only, compute probability scores for ROC-AUC
+    #       Hint: pipeline.predict_proba(X_test_records)[:, 1]
+    #       How would you guard this so it only runs when config.target_type == "binary"?
+
+    # CHANGED: previously this was an if/else branch:
+    #   average = "binary" if config.target_type == "binary" else "macro"
+    # Moving the value into config.metric_average eliminates the branch and makes
+    # the choice explicit per experiment — a multiclass experiment could use
+    # "weighted" instead of "macro" without touching this function at all.
+    average = config.metric_average
 
     metrics: dict[str, float] = {
         "f1_train":       ...,  # f1_score(y_train, y_pred_train, average=average)
         "f1_test":        ...,  # f1_score(y_test,  y_pred_test,  average=average)
-        "precision_test": ...,  # precision_score(...)
-        "recall_test":    ...,  # recall_score(...)
-        # TODO: add roc_auc_test for binary runs only
+        "precision_test": ...,  # precision_score(y_test, y_pred_test, average=average)
+        "recall_test":    ...,  # recall_score(y_test, y_pred_test, average=average)
+        # TODO: add "roc_auc_test" for binary experiments only
     }
 
-    # TODO: populate params — consider using classifier.get_params()
-    #       so you never have to remember to update this dict when you
-    #       change a hyperparameter above
-    params: dict[str, object] = {
-        "model_family": config.model_family,
-        "target_type":  config.target_type,
-        # ...
-    }
+    # CHANGED: params previously had model_family and target_type hardcoded as
+    # the only entries. Replacing this with classifier.get_params() means every
+    # hyperparameter the classifier was actually built with is logged automatically —
+    # no risk of the dict going stale when you change a value in the config.
+    # Add config.model_family, config.target_type, config.test_size alongside it
+    # so the MLflow params panel is fully self-contained.
+    # TODO: populate params — use classifier.get_params() plus the config fields above
+    params: dict[str, object] = {}
 
     return pipeline, metrics, params
 
@@ -498,13 +512,28 @@ def log_model(
     pipeline, metrics: dict, params: dict, config: ExperimentConfig
 ) -> None:
     with mlflow.start_run():
-        # TODO: set tags — what context about this run should be preserved?
+        # CHANGED: tags were previously a mix of hardcoded strings and globals.
+        # Using config fields means every tag is determined by the experiment
+        # definition at the top of the file — no strings buried in functions.
+        # TODO: fill the dict using config.model_family, config.target_type,
+        #       config.target, config.experiment_name, and
+        #       os.getenv("MLFLOW_TRACKING_USERNAME", "unknown") for the developer
         mlflow.set_tags({})
 
-        # TODO: log params and metrics from the dicts returned by train_model()
+        # CHANGED: previously one vague TODO covered all three logging calls.
+        # Splitting them makes it clear that params, metrics, and the model
+        # artifact are three distinct MLflow concepts logged with different calls.
+        # TODO: mlflow.log_params(params)
+        # TODO: mlflow.log_metrics(metrics)
 
-        # TODO: log the pipeline as a sklearn model artifact and register it
-        #       Hint: mlflow.sklearn.log_model(..., registered_model_name=...)
+        # CHANGED: registered_model_name was previously hardcoded as a module-level
+        # constant (MODEL_NAME). Using config.registered_model_name means each
+        # experiment in EXPERIMENTS registers under its own name automatically —
+        # adding a new experiment requires no changes inside this function.
+        # TODO: mlflow.sklearn.log_model(
+        #           pipeline, name="model",
+        #           registered_model_name=config.registered_model_name
+        #       )
         pass
 
 
@@ -551,7 +580,10 @@ def main(experiment: str, cml_run: bool) -> None:
     df = pd.read_csv(DATA_PATH)
     configure_mlflow(config)
 
-    pipeline, metrics, params = train_model(df)
+    # FIXED: was train_model(df) — missing config meant the function had no access
+    # to config.target, config.test_size, config.metric_average, or the classifier
+    # factory. It would have raised an error at runtime.
+    pipeline, metrics, params = train_model(df, config)
     log_model(pipeline, metrics, params, config)
 
     if cml_run:
