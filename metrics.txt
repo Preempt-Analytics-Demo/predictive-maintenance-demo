@@ -1,0 +1,5 @@
+# Training Metrics
+
+f1_test:        0.2622
+precision_test: 0.2572
+recall_test:    0.7288

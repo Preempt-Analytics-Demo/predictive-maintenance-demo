@@ -192,7 +192,7 @@ EXPERIMENTS: dict[str, ExperimentConfig] = {
         ),
     ),
     "logreg_multiclass": ExperimentConfig(
-        experiment_name="predictive-maintenance/logreg/multiclass",
+        experiment_name="predictive-maintenance/logistic-regression/multiclass",
         registered_model_name="logreg-multiclass",
         model_family="logreg",
         target="failure_type",
