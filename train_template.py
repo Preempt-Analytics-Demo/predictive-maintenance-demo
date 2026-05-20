@@ -16,11 +16,9 @@ from pathlib import Path
 
 import click
 import mlflow
-from mlflow import config
-from sklearn.metrics import f1_score, precision_score, recall_score, roc_auc_score
 import pandas as pd
-from sklearn import pipeline
 import xgboost as xgb
+from sklearn.metrics import f1_score, precision_score, recall_score, roc_auc_score
 from dotenv import load_dotenv
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.feature_extraction import DictVectorizer
@@ -32,10 +30,6 @@ from typing import Callable, Optional
 load_dotenv()
 
 DATA_PATH = Path("data/ai4i2020.csv")
-
-# Import dataset using the relative path above. 
-# Adjust this part if the data intake changes (e.g. if you switch to a database or an API instead of a CSV file).
-df = pd.read_csv(DATA_PATH)
 
 COLUMN_RENAME = {
     "Type": "type",
@@ -396,7 +390,12 @@ def train_model(df: pd.DataFrame, config: ExperimentConfig):
     )
 
    
-    imbalance_ratio = (y_train == 0).sum() / (y_train == 1).sum()
+    # Only meaningful for binary classification — multiclass factories ignore it (lambda _)
+    # Guarded here to avoid ZeroDivisionError when y_train contains string labels
+    if config.target_type == "binary":
+        imbalance_ratio = (y_train == 0).sum() / (y_train == 1).sum()
+    else:
+        imbalance_ratio = 1.0
     classifier = _build_classifier(config, imbalance_ratio)
 
     X_train_records = X_train.to_dict(orient="records")
