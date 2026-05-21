@@ -4,9 +4,10 @@ Predictive Maintenance — Modeling Pipeline
 Trains a failure classifier on the AI4I 2020 dataset and logs results to MLflow.
 
 Supported experiments (pass via --experiment):
-    xgb_binary, xgb_multiclass
-    rf_binary,  rf_multiclass
+    xgb_binary,   xgb_multiclass
+    rf_binary,    rf_multiclass
     logreg_binary, logreg_multiclass
+    lgbm_binary,  lgbm_multiclass
 
 Usage:
     python modeling_pipeline.py --experiment xgb_binary
@@ -25,6 +26,7 @@ import click
 import mlflow
 import pandas as pd
 import xgboost as xgb
+import lightgbm as lgb
 from dotenv import load_dotenv
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.feature_extraction import DictVectorizer
@@ -133,6 +135,7 @@ EXPERIMENTS: dict[str, ExperimentConfig] = {
             eval_metric="logloss",
         ),
     ),
+
     "xgb_multiclass": ExperimentConfig(
         experiment_name="predictive-maintenance/xgboost/multiclass",
         registered_model_name="xgboost-multiclass",
@@ -147,6 +150,36 @@ EXPERIMENTS: dict[str, ExperimentConfig] = {
             random_state=42,
             n_jobs=-1,
             eval_metric="mlogloss",
+        ),
+    ),
+
+    "lgbm_binary": ExperimentConfig(
+        experiment_name="predictive-maintenance/lightgbm/binary",
+        registered_model_name="lightgbm-binary",
+        model_family="lightgbm",
+        target="machine_failure",
+        target_type="binary",
+        metric_average="binary",
+        classifier_factory=lambda r: lgb.LGBMClassifier(
+            n_estimators=200,
+            scale_pos_weight=r,
+            random_state=42,
+            n_jobs=-1,
+        ),
+    ),
+
+    "lgbm_multiclass": ExperimentConfig(
+        experiment_name="predictive-maintenance/lightgbm/multiclass",
+        registered_model_name="lightgbm-multiclass",
+        model_family="lightgbm",
+        target="failure_type",
+        target_type="multiclass",
+        metric_average="macro",
+        classifier_factory=lambda _: lgb.LGBMClassifier(
+            n_estimators=200,
+            objective="multiclass",
+            random_state=42,
+            n_jobs=-1,
         ),
     ),
     "rf_binary": ExperimentConfig(
