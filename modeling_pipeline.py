@@ -4,26 +4,30 @@ Predictive Maintenance — Modeling Pipeline
 Trains a failure classifier on the AI4I 2020 dataset and logs results to MLflow.
 
 Supported experiments (pass via --experiment):
-    xgb_binary,   xgb_multiclass
-    rf_binary,    rf_multiclass
+    xgb_binary,    xgb_multiclass
+    rf_binary,     rf_multiclass
     logreg_binary, logreg_multiclass
-    lgbm_binary,  lgbm_multiclass
+    lgbm_binary,   lgbm_multiclass
+    svm_binary,    svm_multiclass
+    mlp_binary,    mlp_multiclass
 
 Usage:
     # Standard training run
     python modeling_pipeline.py --experiment xgb_binary
     python modeling_pipeline.py --experiment lgbm_binary --cml-run
 
-    # Hyperparameter tuning with Optuna (lgbm experiments only)
+    # Hyperparameter tuning with Optuna
     python modeling_pipeline.py --experiment lgbm_binary --tune
     python modeling_pipeline.py --experiment lgbm_binary --tune --n-trials 50
-    python modeling_pipeline.py --experiment lgbm_multiclass --tune --n-trials 30
+    python modeling_pipeline.py --experiment svm_binary --tune --n-trials 50
 
     # Tuning + CML report in one run
     python modeling_pipeline.py --experiment lgbm_binary --tune --n-trials 30 --cml-run
 
 To add a new experiment: add one entry to EXPERIMENTS. No function code changes needed.
 To enable tuning for an experiment: add a param_space lambda to its ExperimentConfig.
+SVM and other distance-based models require needs_scaling=True — StandardScaler is
+inserted into the pipeline automatically when this flag is set.
 Credentials must live in .env — see .env.example.
 """
 
@@ -45,6 +49,9 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import f1_score, precision_score, recall_score, roc_auc_score
 from sklearn.model_selection import StratifiedKFold, train_test_split
 from sklearn.pipeline import make_pipeline
+from sklearn.neural_network import MLPClassifier
+from sklearn.preprocessing import StandardScaler
+from sklearn.svm import SVC
 
 # Silence Optuna's per-trial logging — summary is printed at the end instead.
 optuna.logging.set_verbosity(optuna.logging.WARNING)
@@ -124,6 +131,10 @@ class ExperimentConfig:
                                When provided, --tune mode uses this to define the search
                                space Optuna samples from. If None, --tune is not supported
                                for this experiment.
+        needs_scaling:         If True, StandardScaler is inserted between DictVectorizer
+                               and the classifier in the pipeline. Required for distance-
+                               and boundary-based models (SVM, KNN, MLP). Tree-based
+                               models are scale-invariant — leave False for them.
     """
     experiment_name: str
     registered_model_name: str
@@ -139,6 +150,9 @@ class ExperimentConfig:
     # param_space is optional — only experiments that support tuning define it.
     # None means "this experiment has no search space; --tune will raise clearly."
     param_space: Optional[Callable] = None
+    # needs_scaling controls whether StandardScaler is inserted into the pipeline.
+    # Tree models are invariant to feature scale; distance-based models are not.
+    needs_scaling: bool = False
 
 
 EXPERIMENTS: dict[str, ExperimentConfig] = {
@@ -315,6 +329,199 @@ EXPERIMENTS: dict[str, ExperimentConfig] = {
             random_state=42,
         ),
     ),
+
+    # ── SVM ───────────────────────────────────────────────────────────────────────
+    # SVC finds the maximum-margin hyperplane separating classes. The RBF kernel
+    # maps features into a higher-dimensional space, enabling non-linear boundaries.
+    #
+    # Key difference from tree models: SVM is sensitive to feature scale, so
+    # needs_scaling=True inserts StandardScaler into the pipeline automatically.
+    #
+    # C controls the bias-variance tradeoff:
+    #   small C → wide margin, more misclassifications allowed (high bias)
+    #   large C → narrow margin, tries to classify everything correctly (high variance)
+    # gamma controls the RBF kernel width:
+    #   "scale" → 1 / (n_features * X.var())  — adapts to data variance
+    #   "auto"  → 1 / n_features               — simpler, ignores variance
+    #
+    # probability=True enables predict_proba (needed for ROC-AUC), but adds
+    # overhead via Platt scaling — disabled during CV trials for speed.
+    "svm_binary": ExperimentConfig(
+        experiment_name="predictive-maintenance/svm/binary",
+        registered_model_name="svm-binary",
+        model_family="svm",
+        target="machine_failure",
+        target_type="binary",
+        metric_average="binary",
+        needs_scaling=True,
+        classifier_factory=lambda _: SVC(
+            kernel="rbf",
+            class_weight="balanced",
+            probability=True,
+            random_state=42,
+        ),
+        param_space=lambda trial, _: dict(
+            C      = trial.suggest_float("C", 1e-2, 1e2, log=True),
+            gamma  = trial.suggest_categorical("gamma", ["scale", "auto"]),
+            kernel = "rbf",
+        ),
+    ),
+
+    "svm_multiclass": ExperimentConfig(
+        experiment_name="predictive-maintenance/svm/multiclass",
+        registered_model_name="svm-multiclass",
+        model_family="svm",
+        target="failure_type",
+        target_type="multiclass",
+        metric_average="macro",
+        needs_scaling=True,
+        # SVC handles multiclass natively via one-vs-one (OvO) by default.
+        # With k classes, OvO trains k*(k-1)/2 binary SVMs and takes a majority vote.
+        classifier_factory=lambda _: SVC(
+            kernel="rbf",
+            class_weight="balanced",
+            probability=True,
+            random_state=42,
+        ),
+        param_space=lambda trial, _: dict(
+            C      = trial.suggest_float("C", 1e-2, 1e2, log=True),
+            gamma  = trial.suggest_categorical("gamma", ["scale", "auto"]),
+            kernel = "rbf",
+        ),
+    ),
+
+    # ── MLP (Neural Network) ──────────────────────────────────────────────────────
+    #
+    # How a neural network works — plain language:
+    #
+    #   Input layer:   one node per feature (9 here). No computation — just passes
+    #                  sensor readings into the network.
+    #
+    #   Hidden layers: each neuron takes a weighted sum of the previous layer's
+    #                  outputs and passes it through an activation function.
+    #                  The weights are what the network "learns" during training.
+    #                  More neurons = more capacity to capture patterns.
+    #                  More layers = more abstract patterns (layer 1 might learn
+    #                  "high torque", layer 2 might learn "high torque AND worn tool").
+    #
+    #   Output layer:  one node per class. Softmax converts raw scores to
+    #                  probabilities that sum to 1.
+    #
+    # Why activation functions matter:
+    #   Without them, stacking layers is mathematically identical to one layer —
+    #   a linear function of a linear function is still linear. Activations
+    #   introduce non-linearity so the network can learn curved decision boundaries.
+    #
+    #   ReLU (Rectified Linear Unit) = max(0, x)
+    #     Passes positive values through unchanged, kills negatives.
+    #     Fast to compute. Default choice for most problems.
+    #
+    #   tanh = (e^x - e^-x) / (e^x + e^-x)
+    #     Squashes output to [-1, 1]. Centred at zero (unlike ReLU).
+    #     Can work better when features have negative values.
+    #
+    # How training works — backpropagation:
+    #   1. Forward pass: run a batch of rows through the network, get predictions.
+    #   2. Compute loss: how wrong were the predictions? (cross-entropy loss here)
+    #   3. Backward pass: use the chain rule to compute how much each weight
+    #      contributed to the error.
+    #   4. Gradient descent: nudge every weight slightly in the direction that
+    #      reduces the error. learning_rate_init controls the step size.
+    #   Repeat until the val score stops improving (early_stopping=True).
+    #
+    # How MLP prevents overfitting:
+    #   alpha (L2 regularization): adds a penalty to the loss for large weights.
+    #     Large weights = the network is relying too heavily on specific features.
+    #     Penalising them forces the network to spread evidence across many features.
+    #     Small alpha → weak penalty, more expressive (overfit risk).
+    #     Large alpha → strong penalty, smoother boundary (underfit risk).
+    #   early_stopping: stops training when internal val score plateaus — prevents
+    #     the network from continuing to memorise training rows after generalisation peaks.
+    #
+    # Why MLP needs scaling:
+    #   Gradient descent moves all weights in proportion to their input values.
+    #   A feature in [200, 400 K] causes gradient steps 200× larger than a feature
+    #   in [0, 2 kW]. Without scaling, the optimiser oscillates and converges slowly
+    #   or not at all. StandardScaler puts every feature on the same footing.
+    #
+    # Imbalance limitation:
+    #   sklearn's MLPClassifier has NO class_weight parameter (unlike RF or LogReg).
+    #   The network sees ~97 % "no failure" rows and may learn to predict that by
+    #   default. Watch overfit_delta and recall_test closely — low recall on the
+    #   positive class is the tell-tale sign that imbalance is hurting.
+
+    "mlp_binary": ExperimentConfig(
+        experiment_name="predictive-maintenance/mlp/binary",
+        registered_model_name="mlp-binary",
+        model_family="mlp",
+        target="machine_failure",
+        target_type="binary",
+        metric_average="binary",
+        needs_scaling=True,
+        # hidden_layer_sizes=(128, 64): two hidden layers, 128 neurons then 64.
+        # Wider first layer captures more combinations of input features;
+        # narrower second layer compresses them into higher-level patterns.
+        classifier_factory=lambda _: MLPClassifier(
+            hidden_layer_sizes=(128, 64),
+            activation="relu",
+            alpha=1e-3,
+            max_iter=300,
+            early_stopping=True,
+            random_state=42,
+        ),
+        param_space=lambda trial, _: dict(
+            # Architecture: stored as "width_width" strings because Optuna's persistent
+            # storage cannot serialise Python tuples. The objective converts them back
+            # to tuples before passing to MLPClassifier.
+            # "64"     → one hidden layer of 64 neurons  (shallow)
+            # "128"    → one hidden layer of 128 neurons (shallow, wider)
+            # "64_32"  → two layers: 64 then 32         (gets more abstract)
+            # "128_64" → two layers: 128 then 64        (more capacity, more abstract)
+            hidden_layer_sizes = trial.suggest_categorical(
+                "hidden_layer_sizes", ["64", "128", "64_32", "128_64"]
+            ),
+            # Activation: relu is faster; tanh can win when features go negative.
+            activation         = trial.suggest_categorical("activation", ["relu", "tanh"]),
+            # alpha: L2 penalty weight. Log scale because useful range spans 4 orders
+            # of magnitude (0.0001 to 0.1).
+            alpha              = trial.suggest_float("alpha", 1e-4, 1e-1, log=True),
+            # learning_rate_init: step size for each gradient update.
+            # Too large → overshoots the minimum. Too small → very slow convergence.
+            learning_rate_init = trial.suggest_float("learning_rate_init", 1e-4, 1e-2, log=True),
+            # max_iter is the upper bound on epochs. early_stopping will usually
+            # stop training well before this limit is reached.
+            max_iter           = 300,
+        ),
+    ),
+
+    "mlp_multiclass": ExperimentConfig(
+        experiment_name="predictive-maintenance/mlp/multiclass",
+        registered_model_name="mlp-multiclass",
+        model_family="mlp",
+        target="failure_type",
+        target_type="multiclass",
+        metric_average="macro",
+        needs_scaling=True,
+        # Same architecture as mlp_binary. MLPClassifier detects multiple classes
+        # automatically and switches to a softmax output layer — no config change needed.
+        classifier_factory=lambda _: MLPClassifier(
+            hidden_layer_sizes=(128, 64),
+            activation="relu",
+            alpha=1e-3,
+            max_iter=300,
+            early_stopping=True,
+            random_state=42,
+        ),
+        param_space=lambda trial, _: dict(
+            hidden_layer_sizes = trial.suggest_categorical(
+                "hidden_layer_sizes", ["64", "128", "64_32", "128_64"]
+            ),
+            activation         = trial.suggest_categorical("activation", ["relu", "tanh"]),
+            alpha              = trial.suggest_float("alpha", 1e-4, 1e-1, log=True),
+            learning_rate_init = trial.suggest_float("learning_rate_init", 1e-4, 1e-2, log=True),
+            max_iter           = 300,
+        ),
+    ),
 }
 
 
@@ -427,7 +634,16 @@ def train_model(df: pd.DataFrame, config: ExperimentConfig):
     X_train_records = X_train.to_dict(orient="records")
     X_test_records = X_test.to_dict(orient="records")
 
-    pipeline = make_pipeline(DictVectorizer(), classifier)
+    # StandardScaler is inserted for distance/boundary-based models (SVM, KNN, MLP).
+    # Tree models ignore scale — omitting it keeps their pipelines leaner.
+    # sparse=False is required when scaling: StandardScaler cannot center a sparse
+    # matrix (subtracting the mean from a sparse array would make it dense anyway).
+    # DictVectorizer defaults to sparse=True for memory efficiency on wide feature
+    # spaces — safe to override here because our feature set is only ~11 columns.
+    if config.needs_scaling:
+        pipeline = make_pipeline(DictVectorizer(sparse=False), StandardScaler(), classifier)
+    else:
+        pipeline = make_pipeline(DictVectorizer(), classifier)
     pipeline.fit(X_train_records, y_train)
 
     y_pred_train = pipeline.predict(X_train_records)
@@ -440,9 +656,24 @@ def train_model(df: pd.DataFrame, config: ExperimentConfig):
     )
 
     average = config.metric_average  # "binary" or "macro" — stored per experiment
+    f1_train = f1_score(y_train, y_pred_train, average=average)
+    f1_test  = f1_score(y_test,  y_pred_test,  average=average)
+
+    # overfit_delta = how much better the model scores on training data than test data.
+    # A healthy model stays below ~0.05. Above 0.10 suggests the model is memorising
+    # training rows and may not generalise to new machine data.
+    overfit_delta = f1_train - f1_test
+    if overfit_delta > 0.10:
+        print(
+            f"  WARNING: overfit_delta={overfit_delta:.3f} "
+            f"(f1_train={f1_train:.3f}, f1_test={f1_test:.3f}) — "
+            "consider tightening depth/regularisation params."
+        )
+
     metrics: dict[str, float] = {
-        "f1_train":       f1_score(y_train, y_pred_train, average=average),
-        "f1_test":        f1_score(y_test, y_pred_test, average=average),
+        "f1_train":       f1_train,
+        "f1_test":        f1_test,
+        "overfit_delta":  overfit_delta,   # logged to MLflow so you can sort/filter by it
         "precision_test": precision_score(y_test, y_pred_test, average=average),
         "recall_test":    recall_score(y_test, y_pred_test, average=average),
     }
@@ -552,6 +783,10 @@ def tune_model(
             y_fold_train = y_train.iloc[train_idx]
             y_fold_val   = y_train.iloc[val_idx]
 
+            # X_val_for_pred tracks which array to predict on — SVM rescales
+            # inside the fold, so its val array differs from the default.
+            X_val_for_pred = X_fold_val
+
             if config.model_family == "lightgbm":
                 # early_stopping_rounds: if the validation score does not improve
                 # for this many consecutive trees, LightGBM stops early.
@@ -565,6 +800,50 @@ def tune_model(
                     eval_set=[(X_fold_val, y_fold_val)],
                     callbacks=[lgb.early_stopping(early_stopping_rounds, verbose=False)],
                 )
+            elif config.model_family == "svm":
+                # SVM is sensitive to feature scale — StandardScaler is fit on the
+                # fold's training split only (never on val) to avoid leakage.
+                # probability=False skips Platt scaling during CV (only needed for
+                # predict_proba/ROC-AUC, which the objective doesn't compute).
+                scaler = StandardScaler()
+                X_fold_train = scaler.fit_transform(X_fold_train)
+                X_val_for_pred = scaler.transform(X_fold_val)
+                classifier = SVC(
+                    **params,
+                    class_weight="balanced",
+                    probability=False,
+                    random_state=42,
+                )
+                classifier.fit(X_fold_train, y_fold_train)
+            elif config.model_family == "mlp":
+                # MLP (Multi-Layer Perceptron) — a.k.a. a neural network.
+                #
+                # Like SVM, gradients are computed in feature-space, so unscaled
+                # inputs cause wildly unequal weight updates and slow convergence.
+                # Same fix: fit the scaler on training fold only.
+                scaler = StandardScaler()
+                X_fold_train = scaler.fit_transform(X_fold_train)
+                X_val_for_pred = scaler.transform(X_fold_val)
+
+                # hidden_layer_sizes was stored as a string ("128_64") to satisfy
+                # Optuna's serialisation rules. Convert back to the tuple that
+                # MLPClassifier expects before building the classifier.
+                mlp_params = {**params}
+                mlp_params["hidden_layer_sizes"] = tuple(
+                    int(x) for x in mlp_params["hidden_layer_sizes"].split("_")
+                )
+
+                # early_stopping=True tells sklearn's MLP to hold out 10 % of the
+                # fold's training rows as an internal validation set.  Training stops
+                # when that internal score stops improving — the same idea as LightGBM's
+                # early stopping, just built into the classifier rather than a callback.
+                # This keeps individual trials from overfitting within the CV loop.
+                classifier = MLPClassifier(
+                    **mlp_params,
+                    early_stopping=True,
+                    random_state=42,
+                )
+                classifier.fit(X_fold_train, y_fold_train)
             else:
                 # XGBoost early stopping uses a different API — passed via fit params.
                 # We use a fixed 30-round patience for XGBoost trials.
@@ -575,7 +854,7 @@ def tune_model(
                     verbose=False,
                 )
 
-            y_pred = classifier.predict(X_fold_val)
+            y_pred = classifier.predict(X_val_for_pred)
             fold_scores.append(
                 f1_score(y_fold_val, y_pred, average=config.metric_average)
             )
@@ -742,6 +1021,30 @@ def main(experiment: str, cml_run: bool, tune: bool, n_trials: int) -> None:
         elif config.model_family == "xgboost":
             config.classifier_factory = lambda r: xgb.XGBClassifier(
                 **{**classifier_params, "scale_pos_weight": r if config.target_type == "binary" else 1.0}
+            )
+        elif config.model_family == "svm":
+            # probability=True re-enabled for the final model so predict_proba
+            # is available for ROC-AUC logging. It was disabled during CV trials
+            # for speed (Platt scaling adds significant overhead per fold).
+            config.classifier_factory = lambda _: SVC(
+                **classifier_params,
+                class_weight="balanced",
+                probability=True,
+                random_state=42,
+            )
+        elif config.model_family == "mlp":
+            # Convert hidden_layer_sizes string back to tuple (same as in tune_model).
+            mlp_params = {**classifier_params}
+            mlp_params["hidden_layer_sizes"] = tuple(
+                int(x) for x in mlp_params["hidden_layer_sizes"].split("_")
+            )
+            # early_stopping=True kept for the final model — MLP has no n_estimators
+            # cap like tree models, so without it the network trains until max_iter
+            # regardless of whether the val score is still improving.
+            config.classifier_factory = lambda _: MLPClassifier(
+                **mlp_params,
+                early_stopping=True,
+                random_state=42,
             )
         # Note: RF and logreg don't have param_space defined so --tune will
         # raise a clear ValueError before reaching here.
