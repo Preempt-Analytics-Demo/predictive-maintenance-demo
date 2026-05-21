@@ -149,14 +149,25 @@ EXPERIMENTS: dict[str, ExperimentConfig] = {
         target="machine_failure",
         target_type="binary",
         metric_average="binary",
-        # `r` = imbalance_ratio (~28). scale_pos_weight tells XGBoost to penalise
-        # missed failures 28× more heavily — no resampling needed.
         classifier_factory=lambda r: xgb.XGBClassifier(
             n_estimators=200,
-            scale_pos_weight=r,    # passed in from train_model; compensates ~97:3 split
+            scale_pos_weight=r,
             random_state=42,
-            n_jobs=-1,             # use all CPU cores
+            n_jobs=-1,
             eval_metric="logloss",
+        ),
+        param_space=lambda trial, r: dict(
+            n_estimators      = trial.suggest_int("n_estimators", 100, 500),
+            max_depth         = trial.suggest_int("max_depth", 2, 8),
+            learning_rate     = trial.suggest_float("learning_rate", 0.01, 0.3, log=True),
+            min_child_weight  = trial.suggest_int("min_child_weight", 1, 20),
+            reg_lambda        = trial.suggest_float("reg_lambda", 1e-3, 10.0, log=True),
+            subsample         = trial.suggest_float("subsample", 0.5, 1.0),
+            colsample_bytree  = trial.suggest_float("colsample_bytree", 0.5, 1.0),
+            scale_pos_weight  = r,
+            random_state      = 42,
+            n_jobs            = -1,
+            eval_metric       = "logloss",
         ),
     ),
 
@@ -167,13 +178,25 @@ EXPERIMENTS: dict[str, ExperimentConfig] = {
         target="failure_type",
         target_type="multiclass",
         metric_average="macro",
-        # `_` signals the factory intentionally ignores imbalance_ratio.
         classifier_factory=lambda _: xgb.XGBClassifier(
             n_estimators=200,
-            objective="multi:softprob",  # outputs a probability per class
+            objective="multi:softprob",
             random_state=42,
             n_jobs=-1,
             eval_metric="mlogloss",
+        ),
+        param_space=lambda trial, _: dict(
+            n_estimators      = trial.suggest_int("n_estimators", 100, 500),
+            max_depth         = trial.suggest_int("max_depth", 2, 6),
+            learning_rate     = trial.suggest_float("learning_rate", 0.01, 0.3, log=True),
+            min_child_weight  = trial.suggest_int("min_child_weight", 1, 20),
+            reg_lambda        = trial.suggest_float("reg_lambda", 1e-3, 10.0, log=True),
+            subsample         = trial.suggest_float("subsample", 0.5, 1.0),
+            colsample_bytree  = trial.suggest_float("colsample_bytree", 0.5, 1.0),
+            objective         = "multi:softprob",
+            random_state      = 42,
+            n_jobs            = -1,
+            eval_metric       = "mlogloss",
         ),
     ),
 
@@ -521,14 +544,6 @@ def tune_model(
         # Optuna learns from previous trials which regions look promising.
         params = config.param_space(trial, imbalance_ratio)
 
-        # early_stopping_rounds: if the validation score does not improve for
-        # this many consecutive trees, LightGBM stops adding more trees early.
-        # This directly prevents the model from memorising training data
-        # (the f1_train=1.0 problem) within each trial.
-        # n_estimators in params becomes the *maximum* number of trees —
-        # early stopping may use far fewer.
-        early_stopping_rounds = trial.suggest_int("early_stopping_rounds", 20, 50)
-
         fold_scores = []
 
         for train_idx, val_idx in cv.split(X_train_vec, y_train):
@@ -537,16 +552,28 @@ def tune_model(
             y_fold_train = y_train.iloc[train_idx]
             y_fold_val   = y_train.iloc[val_idx]
 
-            classifier = lgb.LGBMClassifier(**params, verbose=-1)
-
-            # eval_set gives LightGBM a validation fold to monitor during training.
-            # Each new tree is evaluated on this fold — if it doesn't improve the
-            # score for early_stopping_rounds consecutive rounds, training stops.
-            classifier.fit(
-                X_fold_train, y_fold_train,
-                eval_set=[(X_fold_val, y_fold_val)],
-                callbacks=[lgb.early_stopping(early_stopping_rounds, verbose=False)],
-            )
+            if config.model_family == "lightgbm":
+                # early_stopping_rounds: if the validation score does not improve
+                # for this many consecutive trees, LightGBM stops early.
+                # This prevents memorising training data within each trial.
+                # n_estimators in params becomes the *maximum* — early stopping
+                # may use far fewer.
+                early_stopping_rounds = trial.suggest_int("early_stopping_rounds", 20, 50)
+                classifier = lgb.LGBMClassifier(**params, verbose=-1)
+                classifier.fit(
+                    X_fold_train, y_fold_train,
+                    eval_set=[(X_fold_val, y_fold_val)],
+                    callbacks=[lgb.early_stopping(early_stopping_rounds, verbose=False)],
+                )
+            else:
+                # XGBoost early stopping uses a different API — passed via fit params.
+                # We use a fixed 30-round patience for XGBoost trials.
+                classifier = xgb.XGBClassifier(**params, verbosity=0)
+                classifier.fit(
+                    X_fold_train, y_fold_train,
+                    eval_set=[(X_fold_val, y_fold_val)],
+                    verbose=False,
+                )
 
             y_pred = classifier.predict(X_fold_val)
             fold_scores.append(
