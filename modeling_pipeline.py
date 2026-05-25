@@ -53,6 +53,7 @@ from sklearn.neural_network import MLPClassifier
 from sklearn.preprocessing import StandardScaler
 from sklearn.svm import SVC
 
+
 # Silence Optuna's per-trial logging — summary is printed at the end instead.
 optuna.logging.set_verbosity(optuna.logging.WARNING)
 
@@ -63,35 +64,8 @@ load_dotenv()
 
 DATA_PATH = Path("data/ai4i2020.csv")
 
-# Maps original CSV column names to clean snake_case equivalents used throughout.
-COLUMN_RENAME = {
-    "Type": "type",
-    "Air temperature [K]": "air_temperature_kelvin",
-    "Process temperature [K]": "process_temperature_kelvin",
-    "Rotational speed [rpm]": "rotational_speed_rpm",
-    "Torque [Nm]": "torque_nm",
-    "Tool wear [min]": "tool_wear_minutes",
-    "Machine failure": "machine_failure",
-    "TWF": "twf",
-    "HDF": "hdf",
-    "PWF": "pwf",
-    "OSF": "osf",
-    "RNF": "rnf",
-}
+from feature_transformation import FEATURES, engineer_features  # noqa: E402
 
-# Five raw sensor readings + three domain-derived features (engineered in preprocess).
-# "type" (L/M/H machine variant) is a string; DictVectorizer one-hot encodes it automatically.
-FEATURES = [
-    "type",
-    "air_temperature_kelvin",
-    "process_temperature_kelvin",
-    "rotational_speed_rpm",
-    "torque_nm",
-    "tool_wear_minutes",
-    "power_kw",           # torque × rpm → watts, converted to kW
-    "temp_diff_kelvin",   # process − air temperature
-    "mechanical_stress",  # torque × tool wear (combined wear hazard)
-]
 
 
 # ── Experiment registry ────────────────────────────────────────────────────────
@@ -529,32 +503,10 @@ EXPERIMENTS: dict[str, ExperimentConfig] = {
 # Renames columns, engineers three domain features from EDA, and (for multiclass)
 # collapses the five binary failure flags into one string label.
 # Output contains only FEATURES + target — nothing else reaches the model.
-
 def preprocess(df: pd.DataFrame, config: ExperimentConfig) -> pd.DataFrame:
-    """Rename columns, engineer features, and slice to model inputs + target.
-
-    Domain features added here (each justified by EDA):
-    - power_kw:          torque × rpm → kW. Failures cluster at power extremes.
-    - temp_diff_kelvin:  process − air temperature. HDF risk rises when diff < 8.6 K.
-    - mechanical_stress: torque × tool wear. High torque on a worn tool is a compound hazard.
-
-    For multiclass experiments the five binary failure columns (twf, hdf, pwf, osf, rnf)
-    are collapsed into a single string label; rows with no active flag become "none".
-
-    Args:
-        df:     Raw DataFrame loaded directly from ai4i2020.csv (original column names).
-        config: Active experiment config. Determines the target column and whether
-                the multiclass label column is built.
-
-    Returns:
-        DataFrame with columns FEATURES + [config.target]. Shape: (n_rows, 10).
-        All rows from the input are preserved — no filtering is applied here.
-    """
-    df = df.copy().rename(columns=COLUMN_RENAME)
-
-    df["power_kw"] = (df["torque_nm"] * df["rotational_speed_rpm"] * 2 * 3.14159 / 60) / 1000
-    df["temp_diff_kelvin"] = df["process_temperature_kelvin"] - df["air_temperature_kelvin"]
-    df["mechanical_stress"] = df["torque_nm"] * df["tool_wear_minutes"]
+    # engineer_features() handles column renaming + all three derived features.
+    # Defined in feature_transformation.py so the simulator uses the exact same transforms.
+    df = engineer_features(df)
 
     if config.target_type == "multiclass":
         failure_cols = ["twf", "hdf", "pwf", "osf", "rnf"]
@@ -562,9 +514,8 @@ def preprocess(df: pd.DataFrame, config: ExperimentConfig) -> pd.DataFrame:
             active = [c for c in failure_cols if row[c] == 1]
             return active[0] if active else "none"
         df["failure_type"] = df.apply(resolve_label, axis=1)
-
+    
     return df[FEATURES + [config.target]]
-
 
 # ── Classifier builder ─────────────────────────────────────────────────────────
 # Thin wrapper that keeps train_model() free of any classifier-specific logic.
