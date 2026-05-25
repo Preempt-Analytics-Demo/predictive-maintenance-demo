@@ -1,0 +1,110 @@
+# DVC Pipeline — Predictive Maintenance
+# =======================================
+# Defines one stage per experiment. Each stage knows:
+#   deps  → which files, if changed, should trigger a rerun
+#   cmd   → the exact command to reproduce this run
+#
+# Usage:
+#   dvc repro                          # rerun all stages whose deps changed
+#   dvc repro train_xgb_binary         # rerun one stage only
+#   dvc repro --dry                    # preview what would rerun without running
+#
+# Note: outputs go to MLflow (not local files), so there are no `outs` entries.
+# DVC tracks reproducibility via deps — if modeling_pipeline.py, feature_transformation.py,
+# or the dataset change, the affected stages are marked as changed and will rerun.
+#
+# Tuning: stages below use fixed params for fast reproduction.
+# To run with Optuna tuning, call manually:
+#   python modeling_pipeline.py --experiment xgb_binary --tune --n-trials 50
+
+stages:
+
+  # ── Tree-based: XGBoost ──────────────────────────────────────────────────────
+  train_xgb_binary:
+    cmd: python modeling_pipeline.py --experiment xgb_binary
+    deps:
+      - modeling_pipeline.py
+      - feature_transformation.py
+      - data/ai4i2020.csv
+
+  train_xgb_multiclass:
+    cmd: python modeling_pipeline.py --experiment xgb_multiclass
+    deps:
+      - modeling_pipeline.py
+      - feature_transformation.py
+      - data/ai4i2020.csv
+
+  # ── Tree-based: LightGBM ─────────────────────────────────────────────────────
+  train_lgbm_binary:
+    cmd: python modeling_pipeline.py --experiment lgbm_binary
+    deps:
+      - modeling_pipeline.py
+      - feature_transformation.py
+      - data/ai4i2020.csv
+
+  train_lgbm_multiclass:
+    cmd: python modeling_pipeline.py --experiment lgbm_multiclass
+    deps:
+      - modeling_pipeline.py
+      - feature_transformation.py
+      - data/ai4i2020.csv
+
+  # ── Tree-based: Random Forest ────────────────────────────────────────────────
+  train_rf_binary:
+    cmd: python modeling_pipeline.py --experiment rf_binary
+    deps:
+      - modeling_pipeline.py
+      - feature_transformation.py
+      - data/ai4i2020.csv
+
+  train_rf_multiclass:
+    cmd: python modeling_pipeline.py --experiment rf_multiclass
+    deps:
+      - modeling_pipeline.py
+      - feature_transformation.py
+      - data/ai4i2020.csv
+
+  # ── Probabilistic: Logistic Regression ──────────────────────────────────────
+  train_logreg_binary:
+    cmd: python modeling_pipeline.py --experiment logreg_binary
+    deps:
+      - modeling_pipeline.py
+      - feature_transformation.py
+      - data/ai4i2020.csv
+
+  train_logreg_multiclass:
+    cmd: python modeling_pipeline.py --experiment logreg_multiclass
+    deps:
+      - modeling_pipeline.py
+      - feature_transformation.py
+      - data/ai4i2020.csv
+
+  # ── Distance-based: SVM ──────────────────────────────────────────────────────
+  train_svm_binary:
+    cmd: python modeling_pipeline.py --experiment svm_binary
+    deps:
+      - modeling_pipeline.py
+      - feature_transformation.py
+      - data/ai4i2020.csv
+
+  train_svm_multiclass:
+    cmd: python modeling_pipeline.py --experiment svm_multiclass
+    deps:
+      - modeling_pipeline.py
+      - feature_transformation.py
+      - data/ai4i2020.csv
+
+  # ── Neural Network: MLP ──────────────────────────────────────────────────────
+  train_mlp_binary:
+    cmd: python modeling_pipeline.py --experiment mlp_binary
+    deps:
+      - modeling_pipeline.py
+      - feature_transformation.py
+      - data/ai4i2020.csv
+
+  train_mlp_multiclass:
+    cmd: python modeling_pipeline.py --experiment mlp_multiclass
+    deps:
+      - modeling_pipeline.py
+      - feature_transformation.py
+      - data/ai4i2020.csv
