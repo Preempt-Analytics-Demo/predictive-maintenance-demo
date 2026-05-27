@@ -47,6 +47,28 @@ Before any change that touches an Integration Contract (listed below), state:
   2. Which other files depend on that contract
   3. Whether those files are being updated in the same change
 
+### Standing Protocol — Commit & Push After Every Change
+Every completed change — however small — must be committed and pushed immediately.
+Do not batch changes across multiple edits before committing.
+
+**Commit message format:**
+```
+<short imperative summary of what changed (max 72 chars)>
+
+<one or two sentences on WHY: what problem this solves or what it enables>
+
+Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
+```
+
+**What counts as a good commit message:**
+- Summary uses an imperative verb: "add", "fix", "update", "remove" — not "added" or "adding"
+- The body answers WHY, not WHAT (the diff shows what)
+- Never reference the current task, issue number, or session — those rot as the
+  codebase evolves. Write for a reader who has no context beyond git log.
+
+**Scope:** one logical change = one commit. If two files change for the same reason,
+they belong in the same commit. If they change for different reasons, split them.
+
 ### Meta-Law — Conflict Resolution
 Laws are ordered. When they conflict, state the conflict, justify the resolution,
 and resolve in hierarchy order.
