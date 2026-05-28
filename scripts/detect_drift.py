@@ -99,7 +99,7 @@ REPORT_DIR    = _ROOT / "reports"                         # where the HTML repor
 # ai4i2020_baseline.csv is locked at project start and never changes, so drift
 # is always measured against the same original ground truth.
 
-# 0.25 ≈ 2/9 — alert if two or more features drift. Missing real drift is more costly
+# 0.33 ≈ 3/9 — alert if two or more features drift. Missing real drift is more costly
 # than a false alarm in a safety-critical context (unplanned downtime, failed components),
 # so we err on the side of sensitivity without triggering on a single noisy feature.
 # Override at runtime with --threshold without editing this file.

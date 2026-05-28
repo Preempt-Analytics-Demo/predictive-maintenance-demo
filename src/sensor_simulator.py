@@ -108,38 +108,45 @@ load_dotenv()
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# SENSOR DISTRIBUTION CONSTANTS
+# SENSOR DISTRIBUTION — empirical row sampling
 # ══════════════════════════════════════════════════════════════════════════════
 #
-# These values come from running .describe() on data/ai4i2020.csv.
-# Sampling from the same distributions as the training data keeps the
-# simulator's readings in a range the model was actually trained on.
-# Random numbers drawn far outside this range would produce meaningless predictions.
-
-MACHINE_TYPES        = ["L", "M", "H"]
-MACHINE_TYPE_WEIGHTS = [0.60, 0.30, 0.10]   # proportions from the original dataset
-
-# Temperature constants — fitted from ai4i2020.csv describe()
-# Process temperature is NOT sampled independently from air temperature.
-# In the real dataset they correlate at 0.876 — both reflect the same factory
-# thermal environment.  Sampling them independently inflates process_temp
-# variance by 51% (simulator std 2.24K vs training 1.48K), causing false drift
-# alerts when comparing simulation to training data.  A bivariate normal
-# reproduces both marginal distributions and the correct joint covariance.
-AIR_TEMP_MEAN     = 300.0       # mean air temperature (K)
-PROCESS_TEMP_MEAN = 310.0       # mean process temperature (K)
-TEMP_COV_MATRIX   = [           # 2×2 covariance: [[var_air, cov], [cov, var_proc]]
-    [4.000, 2.601],             # var_air = 2.0² = 4.0;  cov = ρ×σ_air×σ_proc = 0.876×2.0×1.484 ≈ 2.601
-    [2.601, 2.202],             # cov = 2.601;  var_proc = 1.484² ≈ 2.202
-]
-
-ROTATIONAL_SPEED_RPM = (1538.0, 179.0)
-TORQUE_NM            = (39.9,   9.97)
+# Gaussian approximations (fitted means/stds per feature) cannot reproduce
+# the joint correlation structure of the training data.  Temperature,
+# torque, and rpm are all inter-correlated through machine physics; sampling
+# each independently creates a wrong product distribution for derived features
+# like power_kw and temp_diff_kelvin.  Sampling complete rows from the training
+# CSV preserves every marginal distribution AND every pairwise correlation in
+# one step — no parameters to tune and no distributional shape assumptions.
+# Failure injection then applies physics-based offsets on top of the sampled row.
 
 TOOL_WEAR_MAX_MINUTES  = 216   # cycling ceiling that reproduces training mean (108 min = 216/2)
 TOOL_WEAR_STEP_MINUTES = 2     # wear added per reading, per machine
 
 DEFAULT_N_MACHINES = 5         # spread readings across multiple machines in parallel
+
+# ── Training row cache ─────────────────────────────────────────────────────────
+# Loaded once from ai4i2020_baseline.csv on first use.  Stored as parallel
+# numpy arrays so indexing a random row is a single integer lookup per array.
+_TRAINING_ROWS: dict | None = None
+
+def _load_training_rows() -> dict:
+    """Return training sensor arrays, loading from CSV on first call."""
+    global _TRAINING_ROWS
+    if _TRAINING_ROWS is None:
+        csv_path = Path(__file__).parent.parent / "data" / "ai4i2020_baseline.csv"
+        df = pd.read_csv(csv_path, usecols=[
+            "Type", "Air temperature [K]", "Process temperature [K]",
+            "Rotational speed [rpm]", "Torque [Nm]",
+        ])
+        _TRAINING_ROWS = {
+            "type":      df["Type"].values,
+            "air_temp":  df["Air temperature [K]"].values,
+            "proc_temp": df["Process temperature [K]"].values,
+            "rpm":       df["Rotational speed [rpm]"].values.astype(int),
+            "torque":    df["Torque [Nm]"].values,
+        }
+    return _TRAINING_ROWS
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -411,33 +418,29 @@ def generate_raw_reading(tool_wear_minutes: float, inject_failure: bool) -> dict
         Dict using original CSV column names. These names must match
         COLUMN_RENAME in feature_transformation.py exactly.
     """
-    machine_type = random.choices(MACHINE_TYPES, weights=MACHINE_TYPE_WEIGHTS)[0]
+    # Draw a random row from the training data.  This gives us machine_type,
+    # air_temp, process_temp, rpm, and torque all from the same real observation,
+    # preserving every pairwise correlation in one step.
+    rows = _load_training_rows()
+    idx  = np.random.randint(len(rows["type"]))
+
+    machine_type = rows["type"][idx]
+    air_temp     = float(rows["air_temp"][idx])
+    process_temp = float(rows["proc_temp"][idx])
+    rpm          = int(rows["rpm"][idx])
+    torque       = float(rows["torque"][idx])
 
     if inject_failure and random.random() < HDF_FRACTION:
-        # HDF (Heat Dissipation Failure): narrow the temperature gap only.
-        # rpm and torque stay in the normal range — HDF is a thermal failure,
-        # not a mechanical one. FAILURE_TEMP_OFFSET_KELVIN is (mean, std) fitted
-        # from the 115 HDF rows in the training data (mean gap 8.228K, std 0.282K).
-        air_temp     = np.random.normal(AIR_TEMP_MEAN, 2.0)
-        process_temp = air_temp + np.random.normal(*FAILURE_TEMP_OFFSET_KELVIN)  # narrowed gap
-        torque = max(0.0, np.random.normal(*TORQUE_NM))
-        rpm    = max(500.0, np.random.normal(*ROTATIONAL_SPEED_RPM))
+        # HDF: narrow the temperature gap to ≈8.2 K; rpm and torque unchanged.
+        # We keep the sampled air_temp (real sensor value) and replace only the
+        # process_temp with the HDF-shifted value so the gap reflects the failure.
+        process_temp = air_temp + np.random.normal(*FAILURE_TEMP_OFFSET_KELVIN)
     elif inject_failure:
-        # PWF / OSF (Power Failure / Overstrain): shift rpm and torque only.
-        # Temperatures stay in the normal joint distribution — these are
-        # mechanical failures, not thermal ones.
-        air_temp, process_temp = np.random.multivariate_normal(
-            [AIR_TEMP_MEAN, PROCESS_TEMP_MEAN], TEMP_COV_MATRIX
-        )
-        torque = max(0.0, np.random.normal(TORQUE_NM[0] + FAILURE_TORQUE_ADD_NM, TORQUE_NM[1] * 0.5))
-        rpm    = max(500.0, np.random.normal(ROTATIONAL_SPEED_RPM[0] + FAILURE_RPM_SHIFT, ROTATIONAL_SPEED_RPM[1] * 0.5))
-    else:
-        # Normal operation: joint sampling preserves the 0.876 correlation.
-        air_temp, process_temp = np.random.multivariate_normal(
-            [AIR_TEMP_MEAN, PROCESS_TEMP_MEAN], TEMP_COV_MATRIX
-        )
-        torque = max(0.0, np.random.normal(*TORQUE_NM))
-        rpm    = max(500.0, np.random.normal(*ROTATIONAL_SPEED_RPM))
+        # PWF / OSF: shift rpm down and torque up from the sampled baseline.
+        # Applying offsets to a real row keeps the shift physically grounded —
+        # the machine was already in a realistic operating state before the fault.
+        rpm    = max(500, rpm    + int(FAILURE_RPM_SHIFT))
+        torque = max(0.0, torque + FAILURE_TORQUE_ADD_NM)
 
     return {
         "Type":                    machine_type,
