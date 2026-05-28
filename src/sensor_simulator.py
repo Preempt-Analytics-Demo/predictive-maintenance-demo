@@ -136,7 +136,7 @@ TEMP_COV_MATRIX   = [           # 2×2 covariance: [[var_air, cov], [cov, var_pr
 ROTATIONAL_SPEED_RPM = (1538.0, 179.0)
 TORQUE_NM            = (39.9,   9.97)
 
-TOOL_WEAR_MAX_MINUTES  = 253   # maximum wear before tool replacement (training data max; was 240)
+TOOL_WEAR_MAX_MINUTES  = 216   # cycling ceiling that reproduces training mean (108 min = 216/2)
 TOOL_WEAR_STEP_MINUTES = 2     # wear added per reading, per machine
 
 DEFAULT_N_MACHINES = 5         # spread readings across multiple machines in parallel
@@ -151,15 +151,24 @@ DEFAULT_N_MACHINES = 5         # spread readings across multiple machines in par
 # The model must detect the failure from the shifted physics, just as a
 # real model would. Three of the five AI4I failure modes are covered:
 #
-#   HDF (Heat Dissipation): shrink temp gap below 8.6 K
-#   PWF (Power Failure):    low rpm + high torque → power out of safe range
-#   OSF (Overstrain):       high torque × high wear → compound hazard
+#   HDF (Heat Dissipation): shrink temp gap — affects temperature only
+#   PWF (Power Failure):    low rpm + high torque → affects rpm/torque only
+#   OSF (Overstrain):       high torque × high wear → affects rpm/torque only
 #   TWF (Tool Wear):        handled naturally by the wear lifecycle
 #   RNF (Random):           not injected — by definition has no sensor signature
+#
+# IMPORTANT — each failure type shifts DIFFERENT sensors:
+# The previous design applied temperature AND rpm/torque shifts to every
+# injected failure, but HDF and PWF/OSF are physically distinct failure modes.
+# In the training data, 33.9% of failures are HDF (temperature only) and
+# 56.9% are PWF/OSF (rpm/torque only). Mixing them for all failures
+# over-injected the HDF temperature signature 3× and inflated temp_diff drift.
+# HDF_FRACTION drives the split inside generate_raw_reading().
 
 FAILURE_TORQUE_ADD_NM      = 18.0
 FAILURE_RPM_SHIFT          = -350.0
-FAILURE_TEMP_OFFSET_KELVIN = 6.0    # narrower gap than the normal ~10 K
+FAILURE_TEMP_OFFSET_KELVIN = (8.2, 0.3)  # HDF gap: mean 8.228 K, std 0.282 K (from training data)
+HDF_FRACTION               = 0.339       # 33.9% of failures in training data are HDF
 
 BASE_FAILURE_RATE       = 0.034     # 3.4% — matches the training dataset failure rate
 GRADUAL_DRIFT_PEAK_RATE = 0.25
@@ -404,18 +413,26 @@ def generate_raw_reading(tool_wear_minutes: float, inject_failure: bool) -> dict
     """
     machine_type = random.choices(MACHINE_TYPES, weights=MACHINE_TYPE_WEIGHTS)[0]
 
-    if inject_failure:
-        # For failure injection, air temp is sampled normally; process temp is
-        # then shifted downward to simulate HDF (Heat Dissipation Failure):
-        # the gap between process and air temp drops below the 8.6 K threshold.
+    if inject_failure and random.random() < HDF_FRACTION:
+        # HDF (Heat Dissipation Failure): narrow the temperature gap only.
+        # rpm and torque stay in the normal range — HDF is a thermal failure,
+        # not a mechanical one. FAILURE_TEMP_OFFSET_KELVIN is (mean, std) fitted
+        # from the 115 HDF rows in the training data (mean gap 8.228K, std 0.282K).
         air_temp     = np.random.normal(AIR_TEMP_MEAN, 2.0)
-        process_temp = air_temp + np.random.normal(FAILURE_TEMP_OFFSET_KELVIN, 0.5)  # narrowed gap
-        # PWF + OSF: lower rpm and raise torque simultaneously
+        process_temp = air_temp + np.random.normal(*FAILURE_TEMP_OFFSET_KELVIN)  # narrowed gap
+        torque = max(0.0, np.random.normal(*TORQUE_NM))
+        rpm    = max(500.0, np.random.normal(*ROTATIONAL_SPEED_RPM))
+    elif inject_failure:
+        # PWF / OSF (Power Failure / Overstrain): shift rpm and torque only.
+        # Temperatures stay in the normal joint distribution — these are
+        # mechanical failures, not thermal ones.
+        air_temp, process_temp = np.random.multivariate_normal(
+            [AIR_TEMP_MEAN, PROCESS_TEMP_MEAN], TEMP_COV_MATRIX
+        )
         torque = max(0.0, np.random.normal(TORQUE_NM[0] + FAILURE_TORQUE_ADD_NM, TORQUE_NM[1] * 0.5))
         rpm    = max(500.0, np.random.normal(ROTATIONAL_SPEED_RPM[0] + FAILURE_RPM_SHIFT, ROTATIONAL_SPEED_RPM[1] * 0.5))
     else:
-        # Joint sampling: preserves the 0.876 correlation from the training data.
-        # Independent sampling would give process_temp std = 2.24K vs the true 1.48K.
+        # Normal operation: joint sampling preserves the 0.876 correlation.
         air_temp, process_temp = np.random.multivariate_normal(
             [AIR_TEMP_MEAN, PROCESS_TEMP_MEAN], TEMP_COV_MATRIX
         )
