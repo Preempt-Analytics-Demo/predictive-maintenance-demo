@@ -668,12 +668,17 @@ def run_simulation(
         "Change this to point at a remote server or a non-default port."
     ),
 )
+@click.option(
+    "--reset", is_flag=True, default=False,
+    help="Delete all existing rows from simulation.db before starting. Use this to begin a clean run.",
+)
 def main(
     mode: str,
     n_readings: int,
     n_machines: int,
     interval: float,
     api_url: str,
+    reset: bool,
 ) -> None:
     """Simulate sensor readings, send each to the prediction API, and store results.
 
@@ -694,6 +699,15 @@ def main(
     check_api_health(api_url)
 
     conn = init_db(DB_PATH)
+
+    if reset:
+        # DELETE removes all rows but keeps the table and file intact.
+        # This is equivalent to rm simulation.db followed by a fresh init,
+        # but safer: the file remains visible and the schema is never dropped.
+        deleted = conn.execute("DELETE FROM sensor_readings").rowcount
+        conn.commit()
+        print(f"  Database reset — {deleted} existing row(s) deleted.")
+
     print("  Database ready. Starting simulation...\n")
 
     try:
