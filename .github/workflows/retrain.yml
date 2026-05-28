@@ -1,0 +1,182 @@
+# .github/workflows/retrain.yml
+# ================================
+# Automatically retrain the predictive maintenance model whenever new
+# simulation data is merged into main.
+#
+# WHY THIS FILE EXISTS
+# ─────────────────────
+# dvc repro is deterministic and environment-sensitive — running it on a
+# developer laptop introduces "works on my machine" risk. This workflow
+# runs it in a clean, reproducible Ubuntu VM so every retrain uses the
+# same Python version, the same dependency versions, and the same data.
+#
+# WHEN IT RUNS
+# ─────────────
+# The trigger is a push to main that changes data/ai4i2020.csv.dvc.
+# That .dvc file is a tiny pointer (a content hash). When export_simulation_to_csv.py
+# appends new rows and you run `dvc add data/ai4i2020.csv`, the hash changes.
+# Committing and pushing that changed pointer is the signal to CI that
+# new training data is ready — no separate webhook or manual trigger needed.
+#
+# HOW TO READ THIS FILE
+# ──────────────────────
+# A GitHub Actions workflow has three layers:
+#
+#   on:    — WHEN to run (push, schedule, manual button)
+#   jobs:  — WHAT to run (a list of named jobs)
+#   steps: — HOW to run it (ordered commands inside a job)
+#
+# Each step either uses: a pre-built Action from the marketplace,
+# or run: a shell command you write yourself.
+
+name: Retrain on new data
+
+# ── TODO A ────────────────────────────────────────────────────────────────────
+# Add the three GitHub Secrets before this workflow can succeed:
+#   DAGSHUB_USERNAME  — your DagsHub username
+#   DAGSHUB_TOKEN     — DagsHub access token (DagsHub → Settings → Tokens)
+#   MLFLOW_TRACKING_URI — https://dagshub.com/Preempt-Analytics/predictive-maintenance-capstone.mlflow
+#
+# Go to: GitHub repo → Settings → Secrets and variables → Actions → New repository secret
+# ─────────────────────────────────────────────────────────────────────────────
+
+on:
+  push:
+    branches:
+      - main                          # only retrain from the main branch
+    paths:
+      - "data/ai4i2020.csv.dvc"       # only retrain when training data actually changed
+
+  workflow_dispatch:                  # adds a "Run workflow" button in the GitHub Actions UI
+                                      # useful for forcing a retrain without changing data
+
+
+jobs:
+  retrain:
+    runs-on: ubuntu-latest            # clean Ubuntu VM — same result every time
+
+    steps:
+
+      # ── Step 1: Get the code ───────────────────────────────────────────────
+      # actions/checkout downloads your repository into the VM.
+      # Without this, the VM has no files to work with.
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ── Step 2: Set up Python ──────────────────────────────────────────────
+      # actions/setup-python installs a specific Python version and optionally
+      # caches pip downloads between runs (so the second run is faster).
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"                # caches the pip download cache, not the installed packages
+
+      # ── Step 3: Install dependencies ──────────────────────────────────────
+      # pip install -r requirements.txt installs exactly what's pinned there.
+      # The VM starts empty every run — nothing carries over from a previous run.
+      - name: Install Python dependencies
+        run: pip install -r requirements.txt
+
+      # ── Step 4: Give DVC access to the remote storage ─────────────────────
+      # DVC stores large files (the training CSV) on DagsHub, not in Git.
+      # In local development, credentials live in .dvc/config.local (gitignored).
+      # In CI, we write them from GitHub Secrets at runtime.
+      #
+      # dvc remote modify --local writes to .dvc/config.local inside the VM.
+      # --local means it never touches the committed .dvc/config file.
+      - name: Configure DVC credentials
+        run: |
+          dvc remote modify origin --local auth basic
+          dvc remote modify origin --local user ${{ secrets.DAGSHUB_USERNAME }}
+          dvc remote modify origin --local password ${{ secrets.DAGSHUB_TOKEN }}
+
+      # ── Step 5: Download the training data ────────────────────────────────
+      # dvc pull reads data/ai4i2020.csv.dvc (the pointer file in the repo),
+      # looks up the content hash, and downloads the actual CSV from DagsHub.
+      # Without this step, data/ai4i2020.csv doesn't exist in the VM.
+      - name: Pull training data from DVC remote
+        run: dvc pull data/ai4i2020.csv data/ai4i2020_baseline.csv
+
+      # ── Step 6: Run the training pipeline ─────────────────────────────────
+      # dvc repro checks every stage in dvc.yaml. A stage only reruns if its
+      # deps (code or data) changed since the last run. Because ai4i2020.csv
+      # just changed (that's what triggered this workflow), all 12 stages run.
+      #
+      # The env block injects MLflow credentials as environment variables.
+      # modeling_pipeline.py reads MLFLOW_TRACKING_URI and the credentials
+      # from os.getenv() — the same way it reads them from .env locally.
+      - name: Run DVC pipeline (retrain all stages)
+        env:
+          MLFLOW_TRACKING_URI: ${{ secrets.MLFLOW_TRACKING_URI }}
+          MLFLOW_TRACKING_USERNAME: ${{ secrets.DAGSHUB_USERNAME }}
+          MLFLOW_TRACKING_PASSWORD: ${{ secrets.DAGSHUB_TOKEN }}
+        run: dvc repro
+
+      # ── Step 7: Report metrics ─────────────────────────────────────────────
+      # modeling_pipeline.py writes metrics.txt when called with --cml-run.
+      # This step reads that file and posts its contents as a comment on the
+      # pull request or commit that triggered this workflow.
+      #
+      # ── TODO B ──────────────────────────────────────────────────────────────
+      # The step below is a placeholder. To make it post a real metrics comment:
+      #
+      #   1. Add this Action before the metrics step:
+      #        - name: Set up CML
+      #          uses: iterative/setup-cml@v2
+      #
+      #   2. Replace the placeholder run: command with:
+      #        run: |
+      #          cat metrics.txt >> report.md
+      #          cml comment create report.md
+      #      env:
+      #          REPO_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      #
+      #   Note: GITHUB_TOKEN is automatically available — you do not need to
+      #   add it to Secrets manually. GitHub provides it to every workflow.
+      #
+      #   Why does this matter? Without this step, a retrain silently succeeds
+      #   or fails with no visibility. The CML comment puts the F1 score,
+      #   precision, and recall directly on the commit, so you can see at a
+      #   glance whether the new data improved or degraded the model.
+      # ─────────────────────────────────────────────────────────────────────────
+      - name: Post metrics report
+        run: |
+          echo "TODO B: replace this with CML metrics reporting"
+          echo "Retraining complete. Check MLflow for the new model version."
+
+      # ── Step 8: Promote model ──────────────────────────────────────────────
+      # ── TODO C (Design question — discuss with your team) ──────────────────
+      #
+      # After dvc repro, a new model version exists in the MLflow registry.
+      # It does NOT yet have the @production alias — you have to decide who
+      # sets it and when.
+      #
+      # Option 1 — Manual promotion (safer, recommended for now):
+      #   Leave this step out. A developer reviews the metrics in MLflow and
+      #   manually sets the @production alias if the new model is better.
+      #   The API keeps serving the old model until someone promotes the new one.
+      #
+      # Option 2 — Automatic promotion (faster, riskier):
+      #   Add a step that calls the MLflow API to move @production to the new
+      #   version if f1_test exceeds a threshold.
+      #   Risk: a retrain on noisy data could auto-promote a worse model.
+      #
+      # To implement Option 2, you would add a step like this:
+      #
+      #   - name: Auto-promote if F1 improved
+      #     env:
+      #       MLFLOW_TRACKING_URI: ${{ secrets.MLFLOW_TRACKING_URI }}
+      #       MLFLOW_TRACKING_USERNAME: ${{ secrets.DAGSHUB_USERNAME }}
+      #       MLFLOW_TRACKING_PASSWORD: ${{ secrets.DAGSHUB_TOKEN }}
+      #     run: python scripts/promote_model.py --min-f1 0.85
+      #
+      # That promote_model.py script does not exist yet — writing it is the task.
+      # Hint: use mlflow.MlflowClient().set_registered_model_alias() and compare
+      # the latest version's f1_test metric against the current @production version.
+      #
+      # Your task: decide which option fits your risk tolerance, document your
+      # reasoning in a comment here, and implement it (or leave it as manual).
+      # ─────────────────────────────────────────────────────────────────────────
+      - name: Promote model to production
+        run: echo "TODO C: manual promotion via MLflow UI, or implement auto-promote script"
