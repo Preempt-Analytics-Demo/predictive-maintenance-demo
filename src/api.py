@@ -127,7 +127,7 @@ class SensorReading(BaseModel):
         examples=[40.0],
     )
     tool_wear_minutes: float = Field(
-        ..., ge=0, le=240,
+        ..., ge=0, le=260,                                            # training data max is 253; 260 gives a small safety margin
         description="Cumulative tool wear in minutes. Resets to 0 after tool replacement.",
         examples=[108],
     )
