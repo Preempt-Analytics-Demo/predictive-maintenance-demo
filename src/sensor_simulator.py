@@ -59,6 +59,18 @@ How to run
   is not reachable, or if no @production model is loaded, it exits with
   a clear fix message — no ambiguous errors mid-simulation.
 
+Database management
+-------------------
+  Reset only (no API needed — clears all rows, then exits):
+    python src/sensor_simulator.py --reset --n-readings 0
+
+  Reset then immediately run a fresh simulation:
+    python src/sensor_simulator.py --reset --n-readings 10000 --mode normal
+
+  --reset deletes all rows from simulation.db but keeps the file and schema
+  intact.  Use it before a clean drift detection run so old readings do not
+  mix with new ones.
+
 Simulation modes
 ----------------
   normal        — stable 3.4% failure rate (matches training distribution)
@@ -67,7 +79,7 @@ Simulation modes
 
 Prerequisites
 -------------
-  1. API running with a @production model loaded.
+  1. API running with a @production model loaded (not required for --reset --n-readings 0).
      Start it: uvicorn src.api:app --reload
   2. No .env changes needed — the simulator no longer talks to MLflow directly.
 """
