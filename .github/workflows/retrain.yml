@@ -108,23 +108,35 @@ jobs:
 
       
       # Step 8 - Promote model
-      # TODO C - Decide: manual promotion or automatic?
       #
-      # After dvc repro a new model version exists in the MLflow registry.
-      # It does NOT yet have the @production alias. Two options:
+      # scripts/promote_model.py has TWO modes - pick one:
       #
-      # Option 1 - Manual (safer, recommended for now):
-      #   Remove this step entirely. A developer reviews the metrics in MLflow
-      #   and manually sets @production if the new model is better.
-      #   The API keeps serving the old model until someone promotes the new one.
+      # MANUAL MODE (default, no --auto flag)
+      #   The step below runs the script WITHOUT --auto.
+      #   It reports what would happen (new vs current f1_test, gate results)
+      #   but does NOT move the @production alias.
+      #   A developer reviews the output here in the Actions log and promotes
+      #   manually in the MLflow UI if the new version looks good.
       #
-      # Option 2 - Automatic (faster, riskier):
-      #   Add a step that calls promote_model.py to move @production to the new
-      #   version only if f1_test exceeds a threshold.
-      #   Risk: a retrain on noisy data could silently promote a worse model.
+      # AUTO MODE (add --auto to the run: commands below)
+      #   The script moves @production to the new version if both gates pass:
+      #     Gate 1 - improvement: new f1_test > current @production f1_test
+      #     Gate 2 - floor:       new f1_test >= --min-f1 threshold
+      #   If either gate fails the alias is not moved and the step exits 0
+      #   (non-blocking - the CI run still passes).
       #
-      # To implement Option 2 you would need to create scripts/promote_model.py.
-      # Hint: use mlflow.MlflowClient().set_registered_model_alias() and compare
-      # the latest version's f1_test metric against the current @production version.
+      # TODO C - Choose your mode:
+      #   For auto-promote: add --auto to both python commands below.
+      #   For manual only:  remove this step entirely.
       - name: Promote model to production
-        run: echo "TODO C - implement auto-promote or remove this step for manual promotion"
+        env:
+          MLFLOW_TRACKING_URI: ${{ secrets.MLFLOW_TRACKING_URI }}
+          MLFLOW_TRACKING_USERNAME: ${{ secrets.DAGSHUB_USERNAME }}
+          MLFLOW_TRACKING_PASSWORD: ${{ secrets.DAGSHUB_TOKEN }}
+        run: |
+          python scripts/promote_model.py \
+            --model-name predictive-maintenance-binary \
+            --min-f1 0.85
+          python scripts/promote_model.py \
+            --model-name predictive-maintenance-multiclass \
+            --min-f1 0.80
