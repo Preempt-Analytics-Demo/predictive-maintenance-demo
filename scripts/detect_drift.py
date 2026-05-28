@@ -101,7 +101,12 @@ REPORT_DIR   = _ROOT / "reports"                   # where the HTML report is sa
 #
 # Run with --threshold to override at runtime without editing this file.
 
-DRIFT_THRESHOLD = 0.33   # TODO A: is this the right value? change it and explain why.
+DRIFT_THRESHOLD = 0.25   # TODO A: is this the right value? change it and explain why.
+
+# We argue for 0.25 since not catching drift / error can be much more costly in terms of downtime and repairs 
+# and safety than a false alarm.  Even if only 2 of the 9 features drift, it's worth investigating and
+# potentially retraining before the model degrades too much.  In a safety-critical context, 
+# you want to err on the side of caution and catch drift early, even if it means more frequent alerts.
 
 
 # ── Section 3: Load reference data ────────────────────────────────────────────
@@ -144,17 +149,25 @@ def load_current_data(db_path: pathlib.Path, since: str | None = None) -> pd.Dat
     conn = sqlite3.connect(db_path)
 
     # ─────────────────────────────────────────────────────────────────────────
-    # TODO B  (Medium — 15 min):  Add a sliding-window filter on timestamp
+    # TODO B  (Medium — 15 min):  Add a timestamp filter on the query
     # ─────────────────────────────────────────────────────────────────────────
-    # Right now we load ALL rows in simulation.db.  That's fine for a one-off
-    # check, but in a scheduled job you only want readings from the last window
-    # (e.g. "last 24 hours") so you detect recent drift, not ancient history.
+    # IMPORTANT — run order with --purge:
+    #   detect_drift.py must run BEFORE export_simulation_to_csv.py --purge.
+    #   Purging empties simulation.db, so if you purge first there is nothing
+    #   left to compare against the training baseline.
+    #   Correct order: simulate → detect_drift → export --purge
+    #
+    # Why --since is still useful even with --purge:
+    #   If you run the simulator several times before exporting, simulation.db
+    #   accumulates rows from multiple runs.  --since lets you detect drift for
+    #   just the most recent run ("what changed in the last hour?") rather than
+    #   comparing all accumulated rows at once and averaging out the signal.
     #
     # Your task: if `since` is not None, modify the query to add a WHERE clause:
     #   WHERE timestamp > :since
     #
     # Notes:
-    #   • The timestamp column stores ISO-8601 strings ("2026-05-27T15:05:49…").
+    #   • The timestamp column stores ISO-8601 strings ("2026-05-27T15:05:49").
     #     SQLite compares text lexicographically, which works correctly for
     #     ISO-8601 — "2026-05-28" > "2026-05-27" is True in string order.
     #   • Use a parameterised query (the :since placeholder) — NEVER put user
