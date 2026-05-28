@@ -694,10 +694,6 @@ def main(
     print(f"  Storage    : {DB_PATH.resolve()}")
     print()
 
-    # Verify the API is up and a model is loaded before opening the database
-    # or starting the loop — fail fast rather than fail deep.
-    check_api_health(api_url)
-
     conn = init_db(DB_PATH)
 
     if reset:
@@ -707,6 +703,15 @@ def main(
         deleted = conn.execute("DELETE FROM sensor_readings").rowcount
         conn.commit()
         print(f"  Database reset — {deleted} existing row(s) deleted.")
+
+    # --n-readings 0 means "just reset, don't simulate" — no API needed.
+    if n_readings == 0:
+        conn.close()
+        return
+
+    # Verify the API is up and a model is loaded before starting the loop.
+    # This check is deferred until here so --reset can run without the API.
+    check_api_health(api_url)
 
     print("  Database ready. Starting simulation...\n")
 
