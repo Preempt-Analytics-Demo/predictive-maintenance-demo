@@ -128,6 +128,7 @@ Usage
 import sqlite3
 import subprocess
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 import click
@@ -328,41 +329,57 @@ def convert_to_csv_format(sim_df: pd.DataFrame, starting_udi: int) -> pd.DataFra
 # check=True raises CalledProcessError on a non-zero exit code, which stops
 # the sequence and prints the failing command's stderr so the cause is clear.
 
-def _push_to_remote(csv_path: Path, n_rows: int) -> None:
-    """Run dvc add/push and git commit/push to trigger the retrain workflow.
+def _push_to_remote(csv_path: Path, n_rows: int, trigger_retrain: bool = False) -> None:
+    """Run dvc add/push and git commit/push to update the training dataset.
 
-    This is the sequence that connects local export to remote retraining:
-    dvc add updates the .dvc pointer file, dvc push uploads the CSV to
-    DagsHub, and git push causes GitHub Actions to detect the changed
-    pointer and start the retrain job automatically.
+    When trigger_retrain is True, retrain.trigger is also updated and staged.
+    GitHub Actions watches that file, not the .dvc pointer — so a CSV push
+    without trigger_retrain accumulates data silently with no workflow fired.
+    A CSV push with trigger_retrain updates both files in the same commit,
+    which causes the workflow to run.
 
     Args:
-        csv_path: Path to the CSV that was just written.
-        n_rows:   Number of newly exported rows (used in the commit message).
+        csv_path:        Path to the CSV that was just written.
+        n_rows:          Number of newly exported rows (used in the commit message).
+        trigger_retrain: True → update retrain.trigger and fire GitHub Actions.
+                         False → push CSV only, no workflow triggered.
     """
-    dvc_pointer = Path(str(csv_path) + ".dvc")  # e.g. data/ai4i2020.csv.dvc
-    commit_msg  = f"retrain: add {n_rows:,} simulated observations"
+    dvc_pointer     = Path(str(csv_path) + ".dvc")              # data/ai4i2020.csv.dvc
+    retrain_trigger = REPO_ROOT / "retrain.trigger"             # project-root sentinel file
+
+    if trigger_retrain:
+        # Write a UTC timestamp so git log shows exactly when each retrain was triggered.
+        ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        retrain_trigger.write_text(f"drift detected: {ts}\n")   # change content → workflow fires
+        commit_msg = f"retrain: add {n_rows:,} simulated observations [drift]"
+        git_add_targets = [str(dvc_pointer), str(retrain_trigger)]
+    else:
+        commit_msg = f"data: add {n_rows:,} simulated observations [no retrain]"
+        git_add_targets = [str(dvc_pointer)]                     # retrain.trigger unchanged → no workflow
 
     steps = [
-        (["dvc", "add",    str(csv_path)],      "Updating .dvc pointer"),
-        (["dvc", "push",   str(csv_path)],      "Uploading CSV to DagsHub"),
-        (["git", "add",    str(dvc_pointer)],   "Staging .dvc pointer"),
-        (["git", "commit", "-m", commit_msg],   "Committing .dvc pointer"),
-        (["git", "push"],                        "Pushing to GitHub (triggers retraining workflow)"),
+        (["dvc", "add",  str(csv_path)],                "Updating .dvc pointer"),
+        (["dvc", "push", str(csv_path)],                "Uploading CSV to DagsHub"),
+        (["git", "add"] + git_add_targets,              "Staging files"),
+        (["git", "commit", "-m", commit_msg],           "Committing"),
+        (["git", "push"],                               "Pushing to GitHub"),
     ]
 
     for cmd, label in steps:
         click.echo(f"\n  → {label}...")
-        result = subprocess.run(cmd, capture_output=True, text=True)   # capture output for clean printing
+        result = subprocess.run(cmd, capture_output=True, text=True)   # capture for clean printing
         if result.returncode != 0:
             click.echo(f"\nERROR: `{' '.join(cmd)}` failed:", err=True)
             click.echo(result.stderr or result.stdout, err=True)
             sys.exit(1)
         if result.stdout.strip():
-            click.echo(result.stdout.strip())    # show dvc/git output when useful
+            click.echo(result.stdout.strip())
 
-    click.echo("\nGitHub Actions retrain workflow triggered.")
-    click.echo("Monitor at: https://github.com/Preempt-analytics/predictive-maintenance-capstone/actions")
+    if trigger_retrain:
+        click.echo("\nGitHub Actions retrain workflow triggered.")
+        click.echo("Monitor at: https://github.com/Preempt-analytics/predictive-maintenance-capstone/actions")
+    else:
+        click.echo("\nCSV updated on DagsHub. No retrain triggered (retrain.trigger unchanged).")
 
 
 # ── CLI ───────────────────────────────────────────────────────────────────────
@@ -416,9 +433,18 @@ def _push_to_remote(csv_path: Path, n_rows: int) -> None:
     is_flag=True,
     default=False,
     help=(
-        "After writing the CSV, run dvc add, dvc push, git commit, and git push "
-        "automatically. This triggers the GitHub Actions retrain workflow without "
-        "any further manual steps. Ignored when --dry-run is set."
+        "After writing the CSV, run dvc add, dvc push, git commit, and git push. "
+        "Ignored when --dry-run is set."
+    ),
+)
+@click.option(
+    "--retrain",
+    is_flag=True,
+    default=False,
+    help=(
+        "Update retrain.trigger in the same git commit so GitHub Actions fires the "
+        "retrain workflow. Only meaningful with --push. Without this flag, the CSV "
+        "is pushed (data accumulates) but no workflow runs."
     ),
 )
 def main(
@@ -429,6 +455,7 @@ def main(
     dry_run: bool,
     purge: bool,
     push: bool,
+    retrain: bool,
 ) -> None:
     """Convert simulation.db readings to the AI4I CSV format for DVC retraining.
 
@@ -518,15 +545,16 @@ def main(
     # Without it, the steps are printed so the developer can run them manually —
     # useful when you want to inspect the export before committing it.
     if push:
-        _push_to_remote(output, len(export_df))
+        _push_to_remote(output, len(export_df), trigger_retrain=retrain)
     else:
         click.echo("\nNext steps:")
-        click.echo("  dvc add data/ai4i2020.csv          # update the .dvc pointer locally")
-        click.echo("  dvc push data/ai4i2020.csv         # upload CSV to DagsHub")
-        click.echo("  git add data/ai4i2020.csv.dvc")
-        click.echo('  git commit -m "retrain: add N simulated observations"')
-        click.echo("  git push                           # triggers GitHub Actions retrain workflow")
-        click.echo("\n  Or skip these steps by re-running with --push.")
+        click.echo("  dvc add data/ai4i2020.csv")
+        click.echo("  dvc push data/ai4i2020.csv")
+        click.echo("  git add data/ai4i2020.csv.dvc      # data only — no retrain")
+        click.echo("  # or also: git add retrain.trigger  # include to trigger retrain workflow")
+        click.echo('  git commit -m "data: add N simulated observations"')
+        click.echo("  git push")
+        click.echo("\n  Or run automatically: --push (data only) or --push --retrain (data + retrain).")
 
 
 if __name__ == "__main__":

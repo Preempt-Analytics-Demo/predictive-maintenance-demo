@@ -33,7 +33,9 @@ on:
     branches:
       - main
     paths:
-      - "data/ai4i2020.csv.dvc"
+      - "retrain.trigger"   # only fires when drift-triggered export updates this file
+                            # CSV-only pushes (no drift) update ai4i2020.csv.dvc but
+                            # leave retrain.trigger unchanged, so no workflow runs.
 
   workflow_dispatch:
 

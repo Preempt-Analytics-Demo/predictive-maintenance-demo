@@ -346,9 +346,10 @@ Examples:
         action="store_true",
         default=False,
         help=(
-            "If drift is detected, automatically run export_simulation_to_csv.py --push. "
-            "This exports simulation data to the training CSV and triggers the GitHub "
-            "Actions retrain workflow. Only safe when the simulator ran in --mode normal."
+            "Always export simulation data after detection. "
+            "If drift was detected: export --push --retrain (updates retrain.trigger, fires GitHub Actions). "
+            "If no drift: export --push only (CSV grows on DagsHub, no workflow triggered). "
+            "Only safe when the simulator ran in --mode normal."
         ),
     )
     args = parser.parse_args()
@@ -393,21 +394,31 @@ Examples:
     print(f"      Threshold  : {args.threshold:.0%} of features must drift to trigger alert")
     print(f"      Detected   : {drifted_count}/{total_count} features drifted ({drift_share:.0%})")
 
+    export_script = pathlib.Path(__file__).parent / "export_simulation_to_csv.py"
+
     if drift_share >= args.threshold:
         print(f"\n  *** DRIFT DETECTED — {drifted_count} feature(s) shifted significantly ***")
         if args.export_on_drift:
-            # Drift confirmed and auto-export requested: hand off to the export script.
-            # --push runs dvc add/push + git commit/push, which triggers GitHub Actions.
-            print(f"  --export-on-drift set: exporting simulation data and triggering retrain...")
-            export_script = pathlib.Path(__file__).parent / "export_simulation_to_csv.py"
-            subprocess.run([sys.executable, str(export_script), "--push"], check=True)
+            # Drift confirmed: export CSV and update retrain.trigger in the same commit.
+            # --retrain writes a timestamp to retrain.trigger, which GitHub Actions watches.
+            print(f"  --export-on-drift set: exporting data and triggering retrain workflow...")
+            subprocess.run(
+                [sys.executable, str(export_script), "--push", "--retrain"], check=True
+            )
         else:
             print(f"  Next steps:")
             print(f"    1. Open the HTML report and check which features changed.")
-            print(f"    2. Run: python scripts/export_simulation_to_csv.py --push")
+            print(f"    2. Run: python scripts/export_simulation_to_csv.py --push --retrain")
             print(f"       (or re-run detect_drift.py with --export-on-drift to do this automatically)")
     else:
         print(f"\n  PASS — distribution looks stable. No retraining triggered.")
+        if args.export_on_drift:
+            # No drift: export CSV to keep the training dataset growing, but do NOT update
+            # retrain.trigger — the workflow stays silent because there is nothing to learn.
+            print(f"  --export-on-drift set: exporting data for accumulation (no retrain trigger)...")
+            subprocess.run(
+                [sys.executable, str(export_script), "--push"], check=True   # no --retrain
+            )
 
     if too_few:
         print(
