@@ -89,16 +89,25 @@ Four choices that shaped this script — and why they were made this way:
 Retraining loop
 ---------------
   1. python scripts/export_simulation_to_csv.py   ← this script
-  2. dvc add data/ai4i2020.csv
-  3. git add data/ai4i2020.csv.dvc
-  4. git commit -m "retrain: add N simulated observations"
-  5. dvc push
-  6. dvc repro
+  2. dvc add data/ai4i2020.csv          # update the .dvc pointer (local only)
+  3. dvc push data/ai4i2020.csv         # upload the CSV to DagsHub remote
+  4. git add data/ai4i2020.csv.dvc
+  5. git commit -m "retrain: add N simulated observations"
+  6. git push                           # triggers the GitHub Actions retrain workflow
+
+  Note: dvc repro is NOT run locally — GitHub Actions runs it automatically
+  when it detects the changed .dvc pointer on push.
+
+  Or do everything from step 2 onwards in one command:
+    python scripts/export_simulation_to_csv.py --push
 
 Usage
 -----
   # Append new simulation rows to the existing dataset (default):
   python scripts/export_simulation_to_csv.py
+
+  # Export and trigger retraining in one step (runs dvc add/push + git commit/push):
+  python scripts/export_simulation_to_csv.py --push
 
   # Write to a separate file first (safe for inspection):
   python scripts/export_simulation_to_csv.py --output data/simulated_batch.csv --no-append
@@ -111,9 +120,13 @@ Usage
 
   # Export and delete the exported rows from simulation.db (keeps DB small):
   python scripts/export_simulation_to_csv.py --purge
+
+  # Export, purge DB, and trigger retraining:
+  python scripts/export_simulation_to_csv.py --purge --push
 """
 
 import sqlite3
+import subprocess
 import sys
 from pathlib import Path
 
@@ -309,6 +322,49 @@ def convert_to_csv_format(sim_df: pd.DataFrame, starting_udi: int) -> pd.DataFra
     return pd.DataFrame(rows)
 
 
+# ── Retrain trigger ───────────────────────────────────────────────────────────
+# Runs the dvc/git sequence that tells GitHub Actions new data is ready.
+# Each command must succeed before the next one starts — subprocess.run with
+# check=True raises CalledProcessError on a non-zero exit code, which stops
+# the sequence and prints the failing command's stderr so the cause is clear.
+
+def _push_to_remote(csv_path: Path, n_rows: int) -> None:
+    """Run dvc add/push and git commit/push to trigger the retrain workflow.
+
+    This is the sequence that connects local export to remote retraining:
+    dvc add updates the .dvc pointer file, dvc push uploads the CSV to
+    DagsHub, and git push causes GitHub Actions to detect the changed
+    pointer and start the retrain job automatically.
+
+    Args:
+        csv_path: Path to the CSV that was just written.
+        n_rows:   Number of newly exported rows (used in the commit message).
+    """
+    dvc_pointer = Path(str(csv_path) + ".dvc")  # e.g. data/ai4i2020.csv.dvc
+    commit_msg  = f"retrain: add {n_rows:,} simulated observations"
+
+    steps = [
+        (["dvc", "add",    str(csv_path)],      "Updating .dvc pointer"),
+        (["dvc", "push",   str(csv_path)],      "Uploading CSV to DagsHub"),
+        (["git", "add",    str(dvc_pointer)],   "Staging .dvc pointer"),
+        (["git", "commit", "-m", commit_msg],   "Committing .dvc pointer"),
+        (["git", "push"],                        "Pushing to GitHub (triggers retraining workflow)"),
+    ]
+
+    for cmd, label in steps:
+        click.echo(f"\n  → {label}...")
+        result = subprocess.run(cmd, capture_output=True, text=True)   # capture output for clean printing
+        if result.returncode != 0:
+            click.echo(f"\nERROR: `{' '.join(cmd)}` failed:", err=True)
+            click.echo(result.stderr or result.stdout, err=True)
+            sys.exit(1)
+        if result.stdout.strip():
+            click.echo(result.stdout.strip())    # show dvc/git output when useful
+
+    click.echo("\nGitHub Actions retrain workflow triggered.")
+    click.echo("Monitor at: https://github.com/Preempt-analytics/predictive-maintenance-capstone/actions")
+
+
 # ── CLI ───────────────────────────────────────────────────────────────────────
 
 @click.command()
@@ -355,6 +411,16 @@ def convert_to_csv_format(sim_df: pd.DataFrame, starting_udi: int) -> pd.DataFra
         "Ignored when --dry-run is set."
     ),
 )
+@click.option(
+    "--push",
+    is_flag=True,
+    default=False,
+    help=(
+        "After writing the CSV, run dvc add, dvc push, git commit, and git push "
+        "automatically. This triggers the GitHub Actions retrain workflow without "
+        "any further manual steps. Ignored when --dry-run is set."
+    ),
+)
 def main(
     output_path: str,
     db_path: str,
@@ -362,6 +428,7 @@ def main(
     append: bool,
     dry_run: bool,
     purge: bool,
+    push: bool,
 ) -> None:
     """Convert simulation.db readings to the AI4I CSV format for DVC retraining.
 
@@ -370,10 +437,12 @@ def main(
     \b
     1. python scripts/export_simulation_to_csv.py
     2. dvc add data/ai4i2020.csv
-    3. git add data/ai4i2020.csv.dvc
-    4. git commit -m "retrain: add N simulated observations"
-    5. dvc push
-    6. dvc repro
+    3. dvc push data/ai4i2020.csv
+    4. git add data/ai4i2020.csv.dvc
+    5. git commit -m "retrain: add N simulated observations"
+    6. git push   ← GitHub Actions retrain workflow starts automatically
+
+    Or run steps 2-6 automatically: add --push to the command above.
     """
     output = Path(output_path)
     db     = Path(db_path)
@@ -444,12 +513,20 @@ def main(
         deleted = purge_exported_rows(db, sim_df["id"].tolist())
         click.echo(f"  Purged {deleted:,} rows from simulation.db")
 
-    click.echo("\nNext steps:")
-    click.echo("  dvc add data/ai4i2020.csv")
-    click.echo("  git add data/ai4i2020.csv.dvc")
-    click.echo('  git commit -m "retrain: add N simulated observations"')
-    click.echo("  dvc push")
-    click.echo("  dvc repro")
+    # ── Push to remote and trigger retraining ─────────────────────────────────
+    # --push automates the dvc/git sequence that signals GitHub Actions to retrain.
+    # Without it, the steps are printed so the developer can run them manually —
+    # useful when you want to inspect the export before committing it.
+    if push:
+        _push_to_remote(output, len(export_df))
+    else:
+        click.echo("\nNext steps:")
+        click.echo("  dvc add data/ai4i2020.csv          # update the .dvc pointer locally")
+        click.echo("  dvc push data/ai4i2020.csv         # upload CSV to DagsHub")
+        click.echo("  git add data/ai4i2020.csv.dvc")
+        click.echo('  git commit -m "retrain: add N simulated observations"')
+        click.echo("  git push                           # triggers GitHub Actions retrain workflow")
+        click.echo("\n  Or skip these steps by re-running with --push.")
 
 
 if __name__ == "__main__":
