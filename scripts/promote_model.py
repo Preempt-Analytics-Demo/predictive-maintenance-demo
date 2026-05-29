@@ -5,7 +5,7 @@
 # carries no @production alias. The API and simulator both load models:/{name}@production,
 # so nothing changes in production until someone (or this script) moves the alias.
 #
-# TWO MODES — CHOOSE BEFORE EVERY RETRAIN
+# TWO MODES
 #
 #   Manual mode  (default, no --auto flag)
 #     Reports what WOULD happen: shows new vs current f1_test, whether the new
@@ -46,21 +46,21 @@ import mlflow
 from mlflow import MlflowClient
 
 
-# ── Helpers ──────────────────────────────────────────────────────────────────
+# ── Helpers ───────────────────────────────────────────────────────────────────
 
-def get_f1_for_version(client: MlflowClient, model_name: str, version: str) -> float | None:
-    """Return f1_test from the MLflow run that produced this model version.
+def get_metric_for_version(client: MlflowClient, model_name: str, version: str, metric: str) -> float | None:
+    """Return a named metric from the MLflow run that produced this model version.
 
-    Why this approach: model versions don't store metrics directly — metrics
-    live on the run that created them. model_version.run_id is the bridge.
-    Returns None if the run is missing or f1_test was never logged.
+    Model versions don't store metrics directly — metrics live on the run that
+    created them. model_version.run_id is the bridge between registry and runs.
+    Returns None if the run is missing or the metric was never logged.
     """
     mv = client.get_model_version(model_name, version)
     if not mv.run_id:
         return None
     try:
         run = client.get_run(mv.run_id)
-        return run.data.metrics.get("f1_test")
+        return run.data.metrics.get(metric)
     except Exception:
         return None
 
@@ -71,8 +71,7 @@ def get_production_version(client: MlflowClient, model_name: str) -> str | None:
         mv = client.get_model_version_by_alias(model_name, "production")
         return mv.version
     except mlflow.exceptions.MlflowException:
-        # No @production alias set yet — first promotion ever.
-        return None
+        return None   # no @production alias set yet — this will be the first promotion
 
 
 def get_latest_version(client: MlflowClient, model_name: str) -> str | None:
@@ -88,7 +87,7 @@ def get_latest_version(client: MlflowClient, model_name: str) -> str | None:
     return str(max(int(mv.version) for mv in versions))
 
 
-# ── Main ─────────────────────────────────────────────────────────────────────
+# ── Main ──────────────────────────────────────────────────────────────────────
 
 @click.command()
 @click.option(
@@ -119,13 +118,13 @@ def get_latest_version(client: MlflowClient, model_name: str) -> str | None:
     ),
 )
 def main(model_name: str, min_f1: float | None, auto: bool) -> None:
-    # ── Default F1 floor per model family ────────────────────────────────────
+    # ── Default F1 floor per model family ─────────────────────────────────────
     # These defaults represent the minimum acceptable real-world performance.
     # Adjust with --min-f1 if your data distribution or business requirements differ.
     if min_f1 is None:
         min_f1 = 0.85 if "binary" in model_name else 0.80
 
-    # ── Connect to MLflow ─────────────────────────────────────────────────────
+    # ── Connect to MLflow ──────────────────────────────────────────────────────
     # Credentials come from environment variables — never hardcoded.
     # In CI they are injected from GitHub Secrets; locally, source your .env.
     tracking_uri = os.getenv("MLFLOW_TRACKING_URI")
@@ -143,7 +142,7 @@ def main(model_name: str, min_f1: float | None, auto: bool) -> None:
     print(f"  Min F1: {min_f1}")
     print(f"{'='*60}\n")
 
-    # ── Discover versions ─────────────────────────────────────────────────────
+    # ── Discover versions ──────────────────────────────────────────────────────
     latest_version = get_latest_version(client, model_name)
     if not latest_version:
         print(f"ERROR: No versions found for '{model_name}'. Has dvc repro run yet?")
@@ -151,8 +150,8 @@ def main(model_name: str, min_f1: float | None, auto: bool) -> None:
 
     prod_version = get_production_version(client, model_name)
 
-    # ── Fetch F1 scores ───────────────────────────────────────────────────────
-    new_f1 = get_f1_for_version(client, model_name, latest_version)
+    # ── Fetch metrics ──────────────────────────────────────────────────────────
+    new_f1 = get_metric_for_version(client, model_name, latest_version, "f1_test")
     if new_f1 is None:
         print(
             f"ERROR: Could not read f1_test for version {latest_version}. "
@@ -161,7 +160,7 @@ def main(model_name: str, min_f1: float | None, auto: bool) -> None:
         sys.exit(1)
 
     if prod_version:
-        prod_f1 = get_f1_for_version(client, model_name, prod_version)
+        prod_f1 = get_metric_for_version(client, model_name, prod_version, "f1_test")
         print(f"  Current @production : version {prod_version}  f1_test={prod_f1:.4f if prod_f1 is not None else 'N/A'}")
     else:
         prod_f1 = None
@@ -170,7 +169,7 @@ def main(model_name: str, min_f1: float | None, auto: bool) -> None:
     print(f"  Candidate           : version {latest_version}  f1_test={new_f1:.4f}")
     print()
 
-    # ── Evaluate gates ────────────────────────────────────────────────────────
+    # ── Evaluate gates ─────────────────────────────────────────────────────────
     # Gate 1: new model must be strictly better than the current production model.
     # Gate 2: new model must clear the minimum F1 floor regardless of comparison.
     gate_improvement = (prod_f1 is None) or (new_f1 > prod_f1)
@@ -181,33 +180,13 @@ def main(model_name: str, min_f1: float | None, auto: bool) -> None:
         if prod_f1 is None
         else f"{'PASS' if gate_improvement else 'FAIL'}  ({new_f1:.4f} vs {prod_f1:.4f})"
     )
-    print(f"  Gate 1 — improvement  : {improvement_str}")
-    print(f"  Gate 2 — floor >= {min_f1} : {'PASS' if gate_floor else 'FAIL'}  ({new_f1:.4f})")
+    print(f"  Gate 1 — improvement       : {improvement_str}")
+    print(f"  Gate 2 — floor >= {min_f1}  : {'PASS' if gate_floor else 'FAIL'}  ({new_f1:.4f})")
     print()
-
-    # ── TODO A — Add a third gate (optional stretch task) ────────────────────
-    #
-    # Right now we only check f1_test. A production-grade system might also gate on:
-    #   - precision_test (false-positive rate matters for maintenance cost)
-    #   - recall_test    (false-negative rate matters for undetected failures)
-    #   - overfit_delta  (reject models that memorised the training set)
-    #
-    # To add a gate, follow the same pattern as gate_improvement and gate_floor above:
-    #   1. Fetch the metric from the MLflow run (using get_f1_for_version as a template)
-    #   2. Define a boolean gate variable
-    #   3. Add it to the `all_gates_pass` check below
-    #   4. Print its result in the gate summary
-    #
-    # Example for recall_test >= 0.70:
-    #   new_recall = get_metric_for_version(client, model_name, latest_version, "recall_test")
-    #   gate_recall = (new_recall is not None) and (new_recall >= 0.70)
-    #   print(f"  Gate 3 — recall >= 0.70   : {'PASS' if gate_recall else 'FAIL'}  ({new_recall:.4f})")
-    #
-    # Then update: all_gates_pass = gate_improvement and gate_floor and gate_recall
 
     all_gates_pass = gate_improvement and gate_floor
 
-    # ── Decide ────────────────────────────────────────────────────────────────
+    # ── Decide ─────────────────────────────────────────────────────────────────
     if not all_gates_pass:
         print("  Decision: HOLD — one or more gates failed.")
         print("  The @production alias has NOT been moved.")
@@ -215,46 +194,19 @@ def main(model_name: str, min_f1: float | None, auto: bool) -> None:
             print("  (dry run — same result in --auto mode)")
         sys.exit(0)
 
-    # All gates passed — what happens next depends on the mode flag.
     if auto:
-        # ── TODO B — Wire this to retrain.yml (guided task) ──────────────────
-        #
-        # This is the line that actually moves the @production alias.
-        # When called from CI, `latest_version` is the version just created by dvc repro.
-        #
-        # After this runs, api.py and sensor_simulator.py will load the new model
-        # on their next restart (they read @production at startup, not on each request).
-        #
-        # You don't need to change the code below — it's already complete.
-        # Your task is in retrain.yml: replace the TODO C step with:
-        #
-        #   - name: Promote model to production
-        #     env:
-        #       MLFLOW_TRACKING_URI: ${{ secrets.MLFLOW_TRACKING_URI }}
-        #       MLFLOW_TRACKING_USERNAME: ${{ secrets.DAGSHUB_USERNAME }}
-        #       MLFLOW_TRACKING_PASSWORD: ${{ secrets.DAGSHUB_TOKEN }}
-        #     run: |
-        #       python scripts/promote_model.py \
-        #         --model-name predictive-maintenance-binary \
-        #         --min-f1 0.85 \
-        #         --auto
-        #       python scripts/promote_model.py \
-        #         --model-name predictive-maintenance-multiclass \
-        #         --min-f1 0.80 \
-        #         --auto
-        #
-        # To stay in manual mode instead: remove this step from retrain.yml entirely.
-        # The API will keep serving the old model until someone promotes manually.
-
+        # Both gates passed — move the alias to the new version.
+        # After this runs, api.py and sensor_simulator.py will load the new
+        # model on their next restart (they read @production at startup).
         client.set_registered_model_alias(model_name, "production", latest_version)
         print(f"  Decision: PROMOTED — version {latest_version} is now @production.")
-        if prod_version:
+        if prod_version and prod_f1 is not None:
             delta = new_f1 - prod_f1
             print(f"  F1 improvement: +{delta:.4f} ({prod_f1:.4f} -> {new_f1:.4f})")
     else:
         print(f"  Decision: WOULD PROMOTE — version {latest_version} passes all gates.")
         print("  Run with --auto to actually move the @production alias.")
-        if prod_version:
+        if prod_version and prod_f1 is not None:
             delta = new_f1 - prod_f1
             print(f"  F1 improvement: +{delta:.4f} ({prod_f1:.4f} -> {new_f1:.4f})")
 

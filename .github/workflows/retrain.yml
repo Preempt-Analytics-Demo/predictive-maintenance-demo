@@ -82,52 +82,27 @@ jobs:
         run: dvc pull data/ai4i2020.csv data/ai4i2020_baseline.csv
 
       # Step 6 - Run the training pipeline
-      # dvc repro checks every stage in dvc.yaml. A stage only reruns if its
-      # deps changed since the last run. Because ai4i2020.csv just changed,
-      # all 12 stages run. MLflow credentials are injected via env so
-      # modeling_pipeline.py can log to DagsHub the same way it does locally.
+      # Only the two XGBoost stages are retrained here — these are the model
+      # families currently registered under @production. Running all 12 DVC
+      # stages on every data push would retrain SVM, MLP, and four other
+      # families that are not serving traffic, burning CI minutes for no gain.
+      # To re-run the full experiment comparison, trigger the workflow manually
+      # and temporarily change this command to `dvc repro`.
       - name: Run DVC pipeline
         env:
           MLFLOW_TRACKING_URI: ${{ secrets.MLFLOW_TRACKING_URI }}
           MLFLOW_TRACKING_USERNAME: ${{ secrets.DAGSHUB_USERNAME }}
           MLFLOW_TRACKING_PASSWORD: ${{ secrets.DAGSHUB_TOKEN }}
-        run: dvc repro
+        run: dvc repro train_xgb_binary train_xgb_multiclass
 
-      # Step 7 - Report metrics
-      # CML posts the contents of metrics.txt as a comment on the commit.
-      # setup-cml installs the cml command-line tool into the VM.
-      - name: Set up CML
-        uses: iterative/setup-cml@v2
-
-      - name: Post metrics report
-        env:
-          REPO_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          cat metrics.txt >> report.md
-          cml comment create report.md
-
-      
-      # Step 8 - Promote model
-      #
-      # scripts/promote_model.py has TWO modes - pick one:
-      #
-      # MANUAL MODE (default, no --auto flag)
-      #   The step below runs the script WITHOUT --auto.
-      #   It reports what would happen (new vs current f1_test, gate results)
-      #   but does NOT move the @production alias.
-      #   A developer reviews the output here in the Actions log and promotes
-      #   manually in the MLflow UI if the new version looks good.
-      #
-      # AUTO MODE (add --auto to the run: commands below)
-      #   The script moves @production to the new version if both gates pass:
-      #     Gate 1 - improvement: new f1_test > current @production f1_test
-      #     Gate 2 - floor:       new f1_test >= --min-f1 threshold
-      #   If either gate fails the alias is not moved and the step exits 0
-      #   (non-blocking - the CI run still passes).
-      #
-      # TODO C - Choose your mode:
-      #   For auto-promote: add --auto to both python commands below.
-      #   For manual only:  remove this step entirely.
+      # Step 7 - Promote model to production
+      # promote_model.py compares the newly registered version against the
+      # current @production version using two gates:
+      #   Gate 1 — improvement: new f1_test must beat current @production f1_test
+      #   Gate 2 — floor:       new f1_test must meet the minimum threshold
+      # Both gates must pass before the alias is moved. If either fails, the
+      # step exits 0 (non-blocking) and the old model keeps serving traffic.
+      # Review the gate output in the Actions log after each retrain run.
       - name: Promote model to production
         env:
           MLFLOW_TRACKING_URI: ${{ secrets.MLFLOW_TRACKING_URI }}
@@ -136,7 +111,9 @@ jobs:
         run: |
           python scripts/promote_model.py \
             --model-name predictive-maintenance-binary \
-            --min-f1 0.85
+            --min-f1 0.85 \
+            --auto
           python scripts/promote_model.py \
             --model-name predictive-maintenance-multiclass \
-            --min-f1 0.80
+            --min-f1 0.80 \
+            --auto
