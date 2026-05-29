@@ -88,18 +88,27 @@ Four choices that shaped this script — and why they were made this way:
 
 Retraining loop
 ---------------
+The fastest path — one command does everything:
+
+  # Export, push to DagsHub, and fire the GitHub Actions retrain workflow:
+  python scripts/export_simulation_to_csv.py --push --retrain
+
+  # Export and push only (data accumulation, no retrain triggered):
+  python scripts/export_simulation_to_csv.py --push
+
+The manual equivalent of --push --retrain (for reference):
+
   1. python scripts/export_simulation_to_csv.py   ← this script
   2. dvc add data/ai4i2020.csv          # update the .dvc pointer (local only)
   3. dvc push data/ai4i2020.csv         # upload the CSV to DagsHub remote
-  4. git add data/ai4i2020.csv.dvc
-  5. git commit -m "retrain: add N simulated observations"
-  6. git push                           # triggers the GitHub Actions retrain workflow
+  4. # write a UTC timestamp into retrain.trigger
+  5. git add data/ai4i2020.csv.dvc retrain.trigger
+  6. git commit -m "retrain: add N simulated observations [drift]"
+  7. git push                           # GitHub Actions fires because retrain.trigger changed
 
-  Note: dvc repro is NOT run locally — GitHub Actions runs it automatically
-  when it detects the changed .dvc pointer on push.
-
-  Or do everything from step 2 onwards in one command:
-    python scripts/export_simulation_to_csv.py --push
+  GitHub Actions watches retrain.trigger, not ai4i2020.csv.dvc. Omitting step 4-5
+  (i.e. using --push without --retrain) pushes the data silently with no workflow fired.
+  dvc repro is NOT run locally — GitHub Actions handles it in CI.
 
 Usage
 -----

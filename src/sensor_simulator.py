@@ -52,8 +52,17 @@ How to run
   Step 1 — start the API (in a separate terminal):
     uvicorn src.api:app --reload
 
-  Step 2 — start the simulator:
-    python src/sensor_simulator.py --n-readings 500 --mode sudden-spike
+  Step 2 — start the simulator (basic):
+    python src/sensor_simulator.py --n-readings 1000 --mode normal
+
+  Step 2 (recommended) — full automated pipeline:
+    python src/sensor_simulator.py --n-readings 1000 --mode normal --detect-drift --export-on-drift
+
+  --detect-drift     : runs Evidently drift detection after simulation completes.
+  --export-on-drift  : if drift detected, exports CSV + pushes to DagsHub + fires GitHub Actions.
+                       if no drift, exports CSV to DagsHub for accumulation only (no retrain).
+  Both flags work with all modes. Non-normal modes note that drift is expected and continue —
+  useful for stress-testing the retrain pipeline end-to-end.
 
   The simulator calls GET /health before starting the loop. If the API
   is not reachable, or if no @production model is loaded, it exits with
