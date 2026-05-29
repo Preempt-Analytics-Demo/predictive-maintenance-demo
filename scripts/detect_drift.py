@@ -53,6 +53,7 @@ EVIDENTLY API (version 0.7.x) — what is different from older tutorials
 import argparse           # parse --flags from the command line
 import pathlib            # Path objects are safer than raw strings for file paths
 import sqlite3            # built-in SQLite adapter — no install required
+import subprocess         # call export script when --export-on-drift is set
 import sys                # sys.exit(1) signals FAIL to the calling shell / CI
 import warnings           # suppress cosmetic RuntimeWarnings from scipy/Evidently
 
@@ -340,6 +341,16 @@ Examples:
         "--report", default=str(REPORT_DIR / "drift_report.html"),
         help="Output path for the Evidently HTML report.",
     )
+    parser.add_argument(
+        "--export-on-drift",
+        action="store_true",
+        default=False,
+        help=(
+            "If drift is detected, automatically run export_simulation_to_csv.py --push. "
+            "This exports simulation data to the training CSV and triggers the GitHub "
+            "Actions retrain workflow. Only safe when the simulator ran in --mode normal."
+        ),
+    )
     args = parser.parse_args()
 
     # ── Stage 1: Load data ────────────────────────────────────────────────────
@@ -383,16 +394,20 @@ Examples:
     print(f"      Detected   : {drifted_count}/{total_count} features drifted ({drift_share:.0%})")
 
     if drift_share >= args.threshold:
-        # Non-zero exit code signals FAIL to the shell and to any CI/CD pipeline.
-        # A GitHub Actions step that calls this script will fail the workflow,
-        # which you can wire to trigger automatic retraining (see retrain.yml).
-        print(f"\n  *** DRIFT DETECTED - {drifted_count} feature(s) shifted significantly ***")
-        print(f"  Next steps:")
-        print(f"    1. Open the HTML report and check which features changed.")
-        print(f"    2. Run: python scripts/export_simulation_to_csv.py --append")
-        print(f"    3. Run: dvc repro   (retrains the model on the expanded dataset)")
+        print(f"\n  *** DRIFT DETECTED — {drifted_count} feature(s) shifted significantly ***")
+        if args.export_on_drift:
+            # Drift confirmed and auto-export requested: hand off to the export script.
+            # --push runs dvc add/push + git commit/push, which triggers GitHub Actions.
+            print(f"  --export-on-drift set: exporting simulation data and triggering retrain...")
+            export_script = pathlib.Path(__file__).parent / "export_simulation_to_csv.py"
+            subprocess.run([sys.executable, str(export_script), "--push"], check=True)
+        else:
+            print(f"  Next steps:")
+            print(f"    1. Open the HTML report and check which features changed.")
+            print(f"    2. Run: python scripts/export_simulation_to_csv.py --push")
+            print(f"       (or re-run detect_drift.py with --export-on-drift to do this automatically)")
     else:
-        print(f"\n  PASS - distribution looks stable. No retraining triggered.")
+        print(f"\n  PASS — distribution looks stable. No retraining triggered.")
 
     if too_few:
         print(

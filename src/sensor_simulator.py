@@ -86,6 +86,7 @@ Prerequisites
 
 import random
 import sqlite3
+import subprocess
 import sys
 import time
 from datetime import datetime, timezone
@@ -704,6 +705,22 @@ def run_simulation(
     "--reset", is_flag=True, default=False,
     help="Delete all existing rows from simulation.db before starting. Use this to begin a clean run.",
 )
+@click.option(
+    "--detect-drift", "detect_drift", is_flag=True, default=False,
+    help=(
+        "Run drift detection automatically after simulation completes. "
+        "Only meaningful with --mode normal — drift/spike modes inject failures "
+        "by design and will always show distribution shift."
+    ),
+)
+@click.option(
+    "--export-on-drift", "export_on_drift", is_flag=True, default=False,
+    help=(
+        "If drift is detected, automatically export simulation data and push "
+        "to trigger the GitHub Actions retrain workflow. Implies --detect-drift. "
+        "Only safe with --mode normal."
+    ),
+)
 def main(
     mode: str,
     n_readings: int,
@@ -711,6 +728,8 @@ def main(
     interval: float,
     api_url: str,
     reset: bool,
+    detect_drift: bool,
+    export_on_drift: bool,
 ) -> None:
     """Simulate sensor readings, send each to the prediction API, and store results.
 
@@ -753,7 +772,31 @@ def main(
         conn.close()   # always close the DB connection, even if the loop crashes
 
     print(f"\nDone — {n_readings} readings stored in {DB_PATH}.")
-    print("Next: run drift detection on simulation.db to check for feature distribution shift.")
+
+    # ── Auto drift detection ───────────────────────────────────────────────────
+    # --detect-drift and --export-on-drift are only safe in normal mode.
+    # Gradual-drift and sudden-spike inject failures by design, so they will
+    # always show distribution shift — running detection would be misleading
+    # and auto-exporting that data would corrupt the training set.
+    run_detection = detect_drift or export_on_drift
+    if run_detection and mode != "normal":
+        print(
+            f"\nWARNING: --detect-drift skipped — mode '{mode}' injects failures by design "
+            "and will always show drift. Run with --mode normal for meaningful drift detection."
+        )
+    elif run_detection:
+        detect_script = Path(__file__).parent.parent / "scripts" / "detect_drift.py"
+        cmd = [sys.executable, str(detect_script)]
+        if export_on_drift:
+            cmd.append("--export-on-drift")   # pass through: export+push on drift
+        print("\n" + "─" * 60)
+        print("  Auto drift detection starting...")
+        print("─" * 60 + "\n")
+        result = subprocess.run(cmd)           # exit 1 from detect_drift means drift detected
+        sys.exit(result.returncode)            # propagate exit code to the calling shell
+    else:
+        print("Next: run drift detection to check for feature distribution shift.")
+        print("  python scripts/detect_drift.py")
 
 
 if __name__ == "__main__":
