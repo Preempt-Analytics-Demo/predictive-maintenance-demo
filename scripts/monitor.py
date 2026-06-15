@@ -8,9 +8,10 @@
 #   docker compose up monitor
 #
 # WHAT THIS SCRIPT DOES
-# Runs drift detection on a schedule. If drift is detected it exports the
-# simulation data to the training CSV and pushes the retrain trigger to GitHub
-# so the CI retraining pipeline fires automatically — without human intervention.
+# Runs drift detection on a schedule. If drift is detected it delegates the
+# entire export-and-push sequence to export_simulation_to_csv.py, which
+# already contains the dvc add → dvc push → git commit → git push pipeline.
+# This script is purely the scheduler and audit logger — it adds no new logic.
 #
 # WHY A PYTHON SCHEDULER AND NOT LINUX CRON
 # Both work. The Python schedule library (already in requirements.txt) keeps
@@ -26,24 +27,27 @@
 #        v
 #   detect_drift.py runs          (compares simulation.db vs baseline CSV)
 #        |
-#        +-- no drift --> sleep until next scheduled run
+#        +-- no drift --> log PASS to monitor_log.jsonl, sleep until next run
 #        |
 #        +-- drift detected
 #              |
 #              v
-#         export_simulation_to_csv.py --purge   (append to training CSV, clear DB rows)
-#              |
-#              v
-#         dvc add + git push                    (update .dvc pointer, push to GitHub)
-#              |
+#         export_simulation_to_csv.py --purge --push --retrain
+#              |   appends rows to CSV, clears DB, dvc add/push,
+#              |   writes retrain.trigger, git commit + git push
 #              v
 #         GitHub Actions picks up the push      (retrain.yml triggers)
 #              |
 #              v
 #         dvc repro + promote_model.py          (retrain + auto-promote if gates pass)
+#              |
+#              v
+#         log result to monitor_log.jsonl
 
+
+import json                                    # serialise log entries as single-line JSON
 import subprocess
-import sys
+from datetime import datetime, timezone        # UTC timestamps for log entries
 from pathlib import Path
 
 import schedule    # schedule library — already in requirements.txt
@@ -53,6 +57,24 @@ import time
 # ROOT resolves to the project directory regardless of where the script is called from.
 # All subprocess calls use cwd=ROOT so relative paths inside those scripts work.
 ROOT = Path(__file__).resolve().parent.parent
+LOG_PATH = ROOT / "reports" / "monitor_log.jsonl"  # one JSON line appended per run; never overwritten
+
+
+# ── Run log ───────────────────────────────────────────────────────────────────
+# Every scheduled run appends one JSON line to reports/monitor_log.jsonl.
+# This gives a persistent, human-readable audit trail without any extra
+# dependencies. Docker logs scroll away on restart; this file does not.
+# Fields: timestamp (UTC ISO-8601), drift_detected, retrain_triggered.
+
+def _append_log(drift_detected: bool, retrain_triggered: bool) -> None:
+    LOG_PATH.parent.mkdir(parents=True, exist_ok=True)   # create reports/ if absent
+    entry = {
+        "timestamp": datetime.now(timezone.utc).isoformat(),  # UTC so log is timezone-safe
+        "drift_detected": drift_detected,
+        "retrain_triggered": retrain_triggered,
+    }
+    with LOG_PATH.open("a") as f:
+        f.write(json.dumps(entry) + "\n")   # one line per run; never truncates existing entries
 
 
 # ── Drift check ───────────────────────────────────────────────────────────────
@@ -76,109 +98,64 @@ def check_drift() -> None:
     if result.returncode == 0:
         print("  No drift detected. Model distribution is stable.")
         print("  Next check scheduled per configured interval.")
+        _append_log(drift_detected=False, retrain_triggered=False)   # record the PASS
         return
 
-    # ── Step 2: Export simulation data ────────────────────────────────────────
-    # Drift was detected — append simulation rows to the training CSV.
-    # --purge removes the exported rows from simulation.db so they are not
-    # exported again in the next cycle.
-    print("  Drift detected. Exporting simulation data...")
+    # ── Step 2: Export, push data, and trigger retraining ─────────────────────
+    # Drift confirmed. export_simulation_to_csv.py already contains the full
+    # dvc/git pipeline — we delegate entirely rather than reimplementing it here.
+    #
+    # --purge   : removes exported rows from simulation.db so they are not re-exported
+    # --push    : runs dvc add → dvc push to upload the updated CSV to DagsHub
+    # --retrain : writes a UTC timestamp to retrain.trigger and commits + pushes to GitHub
+    #
+    # GitHub Actions watches retrain.trigger; a change there (not ai4i2020.csv.dvc)
+    # is what fires the retrain workflow. See .github/workflows/retrain.yml paths trigger.
+    print("  Drift detected. Exporting data and triggering retrain...")
     export_result = subprocess.run(
-        ["python", "scripts/export_simulation_to_csv.py", "--purge"],
+        ["python", "scripts/export_simulation_to_csv.py", "--purge", "--push", "--retrain"],
         cwd=ROOT,
     )
 
     if export_result.returncode != 0:
-        print("  ERROR: Export failed. Skipping git push — will retry next cycle.")
+        print("  ERROR: Export/push failed. Will retry on next scheduled run.")
+        _append_log(drift_detected=True, retrain_triggered=False)   # record the failure
         return
 
-    # ── Step 3: Update DVC and push to GitHub ─────────────────────────────────
-    # The training CSV has new rows. We need to:
-    #   1. dvc add — recomputes the content hash and updates ai4i2020.csv.dvc
-    #   2. git add  — stages the updated .dvc pointer file
-    #   3. Update retrain.trigger — this is what the GitHub Actions workflow watches
-    #   4. git commit + git push — sends the pointer change to GitHub
-    #
-    # GitHub Actions sees the push, pulls the new CSV from DagsHub, and retrains.
-    #
-    # TODO A — Complete the push sequence
-    # The commands below are scaffolded with placeholders. Replace each TODO
-    # line with the correct shell command. Use subprocess.run() like the examples
-    # above. The first command is done for you as a model.
-    #
-    # Hint: look at what you run manually after export_simulation_to_csv.py.
-    # The sequence is: dvc add → dvc push → git add → git commit → git push
-
-    print("  Updating DVC pointer...")
-    subprocess.run(
-        ["dvc", "add", "data/ai4i2020.csv"],   # recompute hash, update .dvc file
-        cwd=ROOT,
-        check=True,
-    )
-
-    print("  Pushing data to DagsHub...")
-    subprocess.run(
-        ["dvc", "push", "data/ai4i2020.csv"],   # upload new rows to DagsHub remote
-        cwd=ROOT,
-        check=True,
-    )
-
-    # TODO A-1 — Touch retrain.trigger so GitHub Actions fires
-    # retrain.yml watches for changes to retrain.trigger (not ai4i2020.csv.dvc).
-    # Write the current timestamp into it so git sees a real change.
-    # Hint:
-    #   from datetime import datetime, timezone
-    #   (ROOT / "retrain.trigger").write_text(datetime.now(timezone.utc).isoformat())
-    print("  TODO A-1: update retrain.trigger here")
-
-    # TODO A-2 — Stage the changed files for commit
-    # You need to stage: data/ai4i2020.csv.dvc and retrain.trigger
-    # Hint: subprocess.run(["git", "add", ...], cwd=ROOT, check=True)
-    print("  TODO A-2: git add the changed files here")
-
-    # TODO A-3 — Commit with a descriptive message
-    # Hint: subprocess.run(["git", "commit", "-m", "..."], cwd=ROOT, check=True)
-    print("  TODO A-3: git commit here")
-
-    # TODO A-4 — Push to GitHub so GitHub Actions triggers
-    # Hint: subprocess.run(["git", "push"], cwd=ROOT, check=True)
-    print("  TODO A-4: git push here")
-
-    print("  Retrain trigger pushed. GitHub Actions will pick this up shortly.")
+    print("  Retrain triggered. GitHub Actions will pick this up shortly.")
+    _append_log(drift_detected=True, retrain_triggered=True)   # record the success
 
 
 # ── Schedule ──────────────────────────────────────────────────────────────────
 # The schedule library uses a simple chained API:
-#   schedule.every().day.at("02:00").do(check_drift)
-#   schedule.every(6).hours.do(check_drift)
-#   schedule.every(30).minutes.do(check_drift)   ← useful for demos
+#   schedule.every().day.at("02:00").do(check_drift)   ← production
+#   schedule.every(5).minutes.do(check_drift)           ← demo / local dev
 #
-# TODO B — Set the production schedule
-# Replace the placeholder below with the 2am daily schedule.
-# Keep the 5-minute version commented out below it for demo use.
+# Switch to the production line before deploying. The demo line runs frequently
+# so you can verify the full pipeline end-to-end without waiting until 02:00.
 #
 # Production (uncomment when deploying):
 # schedule.every().day.at("02:00").do(check_drift)
 #
-# Demo (runs frequently so you can show it working live):
-schedule.every(5).minutes.do(check_drift)   # TODO B: replace with daily at 02:00
+# Demo (comment out when deploying):
+schedule.every(5).minutes.do(check_drift)
 
 
 # ── Main loop ─────────────────────────────────────────────────────────────────
 # schedule.run_pending() checks whether any scheduled jobs are due and runs them.
-# It must be called in a loop — it does not block between runs.
-# time.sleep(60) means we check the schedule once per minute, which is
-# precise enough for a daily job and cheap in terms of CPU.
+# It returns immediately — it does not block. idle_seconds() tells us exactly
+# how long until the next job is due, so we sleep precisely that long rather
+# than waking up every 60 seconds to find nothing to do.
 if __name__ == "__main__":
     print("Preempt Analytics — Drift Monitor")
-    print("Scheduled checks configured. Waiting for next run...")
+    print(f"  Log file : {LOG_PATH}")
+    print("Scheduled checks configured. Running first check now...")
 
     # Run once immediately at startup so you can verify the pipeline works
     # without waiting for the first scheduled tick.
-    # TODO C — Should we run check_drift() immediately on startup?
-    # Uncomment the line below if you want the first check to run right away:
-    # check_drift()
+    check_drift()
 
     while True:
-        schedule.run_pending()   # fire any jobs whose time has come
-        time.sleep(60)           # wait 60 seconds before checking again
+        schedule.run_pending()          # fire any jobs whose time has come
+        idle = schedule.idle_seconds()  # seconds until the next scheduled job
+        time.sleep(max(idle, 1))        # sleep exactly that long; floor at 1s to avoid busy-spin
