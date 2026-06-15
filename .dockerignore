@@ -1,0 +1,49 @@
+# .dockerignore
+#
+# WHY THIS FILE EXISTS
+# Docker sends everything in the project directory to the build engine when you
+# run `docker build`. Without this file, it would include git history, notebooks,
+# cached Python files, and your .env secrets — bloating the image and risking
+# credential exposure. This file tells Docker what to leave out, the same way
+# .gitignore tells git what not to track.
+
+# ── Secrets — never bake these into an image ──────────────────────────────────
+.env
+.env.local
+.dvc/config.local          # contains DagsHub credentials written by --local flag
+
+# ── Git and DVC internals ──────────────────────────────────────────────────────
+.git
+.dvc/cache                 # large binary cache — pulled at runtime via dvc pull, not baked in
+.dvc/tmp
+
+# ── Python cache ──────────────────────────────────────────────────────────────
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# ── Development files not needed at runtime ───────────────────────────────────
+notebooks/
+archive/
+docs/
+*.ipynb
+.ipynb_checkpoints/
+
+# ── Local database — mounted as a volume at runtime ───────────────────────────
+# simulation.db is shared between containers via a Docker volume (see docker-compose.yml).
+# Baking it into the image would freeze the data at build time.
+simulation.db
+
+# ── Virtual environments ───────────────────────────────────────────────────────
+venv/
+.venv/
+env/
+
+# ── OS and editor noise ────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+*.swp
+.idea/
+.vscode/

@@ -1,0 +1,155 @@
+# docker-compose.yml
+#
+# WHY THIS FILE EXISTS
+# The Dockerfile defines HOW to build one image. docker-compose.yml defines
+# HOW TO RUN multiple containers together as a system. It replaces a long
+# `docker run` command with a single `docker compose up`.
+#
+# HOW TO USE
+#   Start everything:          docker compose up
+#   Start in background:       docker compose up -d
+#   Stop everything:           docker compose down
+#   Rebuild after code change: docker compose up --build
+#   Run the simulator once:    docker compose run --rm simulator --mode sudden-spike --n-readings 500
+#   View logs:                 docker compose logs -f
+#   View one service's logs:   docker compose logs -f api
+
+
+# ── Version ───────────────────────────────────────────────────────────────────
+# The compose file format version. 3.9 is stable and widely supported.
+# Do not confuse this with the Docker Engine version.
+version: "3.9"
+
+
+services:
+
+  # ── API ─────────────────────────────────────────────────────────────────────
+  # The FastAPI serving layer. Loads the @production model at startup and
+  # answers POST /predict requests. This is the service external callers use.
+  api:
+    build: .                            # build the image from Dockerfile in this directory
+    container_name: preempt-api
+    ports:
+      # "host_port:container_port" — maps port 8000 on your machine to port 8000
+      # inside the container. Change the left number to run on a different host port
+      # (e.g. "8080:8000" if port 8000 is taken on your machine).
+      - "8000:8000"
+
+    env_file:
+      # TODO A — Environment variables
+      # The API needs MLFLOW_TRACKING_URI, MLFLOW_TRACKING_USERNAME, and
+      # MLFLOW_TRACKING_PASSWORD to load the model from DagsHub at startup.
+      # env_file reads these from a file and injects them into the container.
+      # Your .env file already has these — it is gitignored and never committed.
+      #
+      # If you want to verify the variables are correct before starting:
+      #   docker compose config
+      # This prints the resolved compose file with secrets substituted.
+      - .env
+
+    volumes:
+      # TODO B — Volumes
+      # A volume maps a path on your host machine to a path inside the container.
+      # Without a volume, files written inside the container disappear when it stops.
+      #
+      # simulation.db must be shared between the API, simulator, and monitor.
+      # All three read from or write to the same file. A volume makes that possible.
+      #
+      # Syntax: "./host/path:/container/path"
+      # The left side is relative to this docker-compose.yml file.
+      # The right side must match where the code expects the file (/app/simulation.db).
+      - ./simulation.db:/app/simulation.db
+      # Mount the data directory so the container can access the CSV files
+      # without baking them into the image (see Dockerfile TODO B).
+      - ./data:/app/data
+      - ./reports:/app/reports        # drift reports written here are visible on the host
+
+    healthcheck:
+      # Docker will call GET /health every 30 seconds and mark the container
+      # "healthy" when it returns HTTP 200. The monitor uses depends_on with
+      # condition: service_healthy to wait for the API before it starts.
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s                   # how often to check
+      timeout: 10s                    # how long to wait for a response
+      retries: 3                      # how many failures before marking unhealthy
+      start_period: 15s               # grace period on startup before checks begin
+
+    restart: unless-stopped           # restart automatically if the container crashes
+
+
+  # ── Monitor ──────────────────────────────────────────────────────────────────
+  # Runs detect_drift.py on a schedule. When drift is detected it exports the
+  # simulation data and triggers the retraining pipeline via GitHub Actions.
+  # Uses the same image as the API but overrides CMD with its own command.
+  monitor:
+    build: .                          # same image — no separate Dockerfile needed
+    container_name: preempt-monitor
+    command: ["python", "scripts/monitor.py"]   # overrides the CMD in Dockerfile
+
+    env_file:
+      - .env                          # needs MLflow credentials for drift detection
+
+    volumes:
+      - ./simulation.db:/app/simulation.db      # reads simulation data from here
+      - ./data:/app/data                        # reads baseline CSV from here
+      - ./reports:/app/reports                  # writes drift HTML reports here
+
+      # TODO C — Git credentials for pushing the retrain trigger
+      # When drift is detected, monitor.py runs export and then needs to push
+      # to GitHub so GitHub Actions picks up the change and retrains.
+      # Inside the container, git has no credentials configured.
+      #
+      # The safest approach: mount your SSH key as a read-only volume.
+      # Uncomment these two lines and adjust the path to your key:
+      # - ~/.ssh/id_ed25519:/root/.ssh/id_ed25519:ro
+      # - ~/.ssh/known_hosts:/root/.ssh/known_hosts:ro
+      #
+      # Alternative: set GIT_AUTHOR_NAME, GIT_AUTHOR_EMAIL, and a GitHub PAT
+      # (personal access token) as environment variables in .env, then use
+      # HTTPS with the token in monitor.py's git push command.
+
+    depends_on:
+      api:
+        condition: service_healthy    # wait for the API to be ready before starting
+
+    restart: unless-stopped
+
+
+  # ── Simulator ────────────────────────────────────────────────────────────────
+  # The simulator is NOT a long-running service — it is a one-shot command you
+  # run on demand to generate sensor readings. Use `docker compose run` not `up`.
+  #
+  # Usage examples:
+  #   docker compose run --rm simulator --mode normal --n-readings 500
+  #   docker compose run --rm simulator --mode sudden-spike --n-readings 1000 --detect-drift
+  #
+  # --rm automatically removes the container after it exits (keeps things tidy).
+  # Arguments after the service name are passed directly to sensor_simulator.py.
+  simulator:
+    build: .
+    container_name: preempt-simulator
+    # TODO D — Complete the simulator command
+    # The entrypoint tells Docker what to run when this service starts.
+    # The arguments (--api-url etc.) are passed separately via `docker compose run`.
+    # Inside the Docker network, the API is reachable by its service name "api",
+    # not "127.0.0.1" — containers communicate over Docker's internal network.
+    #
+    # Replace the TODO below with the correct entrypoint:
+    entrypoint: ["python", "src/sensor_simulator.py", "--api-url", "http://api:8000"]
+
+    env_file:
+      - .env
+
+    volumes:
+      - ./simulation.db:/app/simulation.db
+      - ./data:/app/data
+
+    depends_on:
+      api:
+        condition: service_healthy    # simulator needs the API running to send predictions
+
+    profiles:
+      # "profiles" means this service is NOT started by `docker compose up`.
+      # It only starts when explicitly requested with `docker compose run simulator`.
+      # This prevents the simulator from running in the background consuming resources.
+      - tools
