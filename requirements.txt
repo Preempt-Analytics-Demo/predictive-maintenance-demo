@@ -1,32 +1,36 @@
+# Runtime dependencies — everything needed to run the API, simulator,
+# drift monitor, and training pipeline. Dev tools (jupyter, pytest, black)
+# are intentionally excluded to keep the Docker image lean.
+
+# ── Data ──────────────────────────────────────────────────────────────────────
 pandas==2.3.3
-pyarrow==23.0.1
+pyarrow==23.0.1          # Parquet read/write support for pandas
 numpy==2.0.2
+
+# ── ML ────────────────────────────────────────────────────────────────────────
 scikit-learn==1.8.0
-scipy==1.17.1
-jupyter==1.1.1
-matplotlib==3.10.9
-seaborn==0.13.2
 xgboost==2.0.3
-lightgbm>=4.0.0
-joblib==1.3.2
-jupyterlab==3.6.3
-statsmodels==0.14.0
-pytest==7.4.0
+lightgbm==4.6.0
+optuna==4.3.0
+scipy==1.17.1             # statistical tests used by Evidently
+joblib==1.3.2             # model serialisation (sklearn dependency)
+
+# ── MLflow & DVC ──────────────────────────────────────────────────────────────
 mlflow==3.11.1
-optuna>=3.0.0
-testbook==0.4.2
-parsenvy==3.0.2
-black==23.3.0
-protobuf==4.23.3
-nbdime==4.0.2
 dvc==3.67.1
-requests==2.34.0
-httpx==0.28.1
+protobuf==4.23.3          # required by mlflow gRPC transport
+
+# ── API serving ───────────────────────────────────────────────────────────────
 fastapi==0.136.1
 uvicorn==0.46.0
-schedule==1.2.2
-plotly==5.24.1
-catboost==1.2.10
+httpx==0.28.1             # HTTP client used by sensor_simulator.py
+requests==2.34.0          # HTTP client used by mlflow and dvc internally
+
+# ── CLI & config ──────────────────────────────────────────────────────────────
 click==8.3.3
-load_dotenv==0.1.0
+python-dotenv             # provides `from dotenv import load_dotenv`
+pyyaml                    # provides `import yaml` for params.yaml reading
+
+# ── Drift monitoring ──────────────────────────────────────────────────────────
 evidently==0.7.21
+schedule==1.2.2           # drift monitor scheduling loop
