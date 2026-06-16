@@ -28,8 +28,8 @@ requests==2.34.0          # HTTP client used by mlflow and dvc internally
 
 # ── CLI & config ──────────────────────────────────────────────────────────────
 click==8.3.3
-python-dotenv             # provides `from dotenv import load_dotenv`
-pyyaml                    # provides `import yaml` for params.yaml reading
+python-dotenv==1.2.2      # provides `from dotenv import load_dotenv`
+pyyaml==6.0.3             # provides `import yaml` for params.yaml reading
 
 # ── Drift monitoring ──────────────────────────────────────────────────────────
 evidently==0.7.21
