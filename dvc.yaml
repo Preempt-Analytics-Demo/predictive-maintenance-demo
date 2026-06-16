@@ -37,7 +37,7 @@ stages:
     deps:
       - src/modeling_pipeline.py
       - src/feature_transformation.py
-      - data/ai4i2020.csv
+      - data/ai4i2020.parquet
     params:
       - params.yaml:
         - pipeline
@@ -51,7 +51,7 @@ stages:
     deps:
       - src/modeling_pipeline.py
       - src/feature_transformation.py
-      - data/ai4i2020.csv
+      - data/ai4i2020.parquet
     params:
       - params.yaml:
         - pipeline
@@ -65,7 +65,7 @@ stages:
     deps:
       - src/modeling_pipeline.py
       - src/feature_transformation.py
-      - data/ai4i2020.csv
+      - data/ai4i2020.parquet
     params:
       - params.yaml:
         - pipeline
@@ -75,7 +75,7 @@ stages:
     deps:
       - src/modeling_pipeline.py
       - src/feature_transformation.py
-      - data/ai4i2020.csv
+      - data/ai4i2020.parquet
     params:
       - params.yaml:
         - pipeline
@@ -89,7 +89,7 @@ stages:
     deps:
       - src/modeling_pipeline.py
       - src/feature_transformation.py
-      - data/ai4i2020.csv
+      - data/ai4i2020.parquet
     params:
       - params.yaml:
         - pipeline
@@ -99,7 +99,7 @@ stages:
     deps:
       - src/modeling_pipeline.py
       - src/feature_transformation.py
-      - data/ai4i2020.csv
+      - data/ai4i2020.parquet
     params:
       - params.yaml:
         - pipeline
@@ -113,7 +113,7 @@ stages:
     deps:
       - src/modeling_pipeline.py
       - src/feature_transformation.py
-      - data/ai4i2020.csv
+      - data/ai4i2020.parquet
     params:
       - params.yaml:
         - pipeline
@@ -123,7 +123,7 @@ stages:
     deps:
       - src/modeling_pipeline.py
       - src/feature_transformation.py
-      - data/ai4i2020.csv
+      - data/ai4i2020.parquet
     params:
       - params.yaml:
         - pipeline
@@ -137,7 +137,7 @@ stages:
     deps:
       - src/modeling_pipeline.py
       - src/feature_transformation.py
-      - data/ai4i2020.csv
+      - data/ai4i2020.parquet
     params:
       - params.yaml:
         - pipeline
@@ -147,7 +147,7 @@ stages:
     deps:
       - src/modeling_pipeline.py
       - src/feature_transformation.py
-      - data/ai4i2020.csv
+      - data/ai4i2020.parquet
     params:
       - params.yaml:
         - pipeline
@@ -161,7 +161,7 @@ stages:
     deps:
       - src/modeling_pipeline.py
       - src/feature_transformation.py
-      - data/ai4i2020.csv
+      - data/ai4i2020.parquet
     params:
       - params.yaml:
         - pipeline
@@ -171,7 +171,7 @@ stages:
     deps:
       - src/modeling_pipeline.py
       - src/feature_transformation.py
-      - data/ai4i2020.csv
+      - data/ai4i2020.parquet
     params:
       - params.yaml:
         - pipeline

@@ -66,7 +66,17 @@ RANDOM_STATE  = _p["random_state"]
 CV_FOLDS      = _p["cv_folds"]
 
 
-DATA_PATH = Path("data/ai4i2020.csv")
+# ── Data path and training window ─────────────────────────────────────────────
+# Parquet is a columnar format: it is compressed (~10× smaller than CSV) and
+# lets pandas load only the columns the model needs without reading the whole
+# file. The training window caps how many rows are used per run. Once the
+# dataset grows beyond 50,000 rows from repeated retrain cycles, df.tail()
+# keeps training time flat by always taking the most recent observations —
+# the rows that best reflect the current factory state. At a 3.4% failure rate,
+# 50,000 rows still provides ~1,700 positive examples — well above what any of
+# the classifiers here need.
+DATA_PATH        = Path("data/ai4i2020.parquet")
+TRAINING_WINDOW  = 50_000   # rows; only takes effect once the dataset exceeds this size
 
 from feature_transformation import FEATURES, FAILURE_TYPE_TO_INT, engineer_features  # noqa: E402
 
@@ -1021,7 +1031,8 @@ def main(experiment: str, cml_run: bool, tune: bool, n_trials: int) -> None:
     Without --tune: trains once with the fixed params in EXPERIMENTS.
     """
     config = EXPERIMENTS[experiment]
-    df = pd.read_csv(DATA_PATH)
+    df = pd.read_parquet(DATA_PATH)          # Parquet loads ~10× faster than CSV at the same row count
+    df = df.tail(TRAINING_WINDOW)            # keep only the most recent N rows; no-op until dataset exceeds 50k
     configure_mlflow(config)
 
     if tune:

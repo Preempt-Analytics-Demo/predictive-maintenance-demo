@@ -106,6 +106,12 @@ REPORT_DIR    = _ROOT / "reports"                         # where the HTML repor
 # Override at runtime with --threshold without editing this file.
 DRIFT_THRESHOLD = 0.33
 
+# Evidently's statistical tests (KS, Wasserstein) plateau in accuracy at around
+# 5,000–10,000 rows — loading more does not improve detection quality but slows
+# Evidently down linearly. This cap keeps each nightly check fast regardless of
+# how many readings have accumulated in simulation.db since the last purge.
+CURRENT_DATA_LIMIT = 10_000  # maximum rows read from simulation.db per drift check
+
 
 # ── Section 3: Load reference data ────────────────────────────────────────────
 def load_reference_data(csv_path: pathlib.Path) -> pd.DataFrame:
@@ -144,10 +150,10 @@ def load_current_data(db_path: pathlib.Path, since: str | None = None) -> pd.Dat
     The SELECT alias renames it in one step, so the returned DataFrame matches
     the reference DataFrame column for column.
     """
-    # --since filters to a specific time window, useful when simulation.db has
-    # accumulated multiple runs and you only want to check the most recent batch.
-    # Run order when using --purge: simulate → detect_drift → export --purge.
-    # ISO-8601 strings compare correctly in SQLite lexicographic order.
+    # ORDER BY timestamp DESC takes the newest rows first; LIMIT caps the total.
+    # This means we always check the most recent factory readings — the ones that
+    # reflect today's machine behaviour — rather than older data that may no longer
+    # be representative. ISO-8601 strings sort correctly in SQLite lexicographic order.
     conn = sqlite3.connect(db_path)
 
     base_query = """
@@ -164,11 +170,16 @@ def load_current_data(db_path: pathlib.Path, since: str | None = None) -> pd.Dat
         FROM sensor_readings
     """
 
+    # Append WHERE (optional) then ORDER BY + LIMIT to both query paths.
+    # Row order does not matter for KS or Wasserstein tests — statistics are
+    # order-independent — so DESC ordering only affects which rows are kept.
+    limit_suffix = f"ORDER BY timestamp DESC LIMIT {CURRENT_DATA_LIMIT}"
     if since is not None:
-        query  = base_query + " WHERE timestamp > :since"
+        query = base_query + f" WHERE timestamp > :since {limit_suffix}"
         df = pd.read_sql_query(query, conn, params={"since": since})
     else:
-        df = pd.read_sql_query(base_query, conn)
+        query = base_query + f" {limit_suffix}"
+        df = pd.read_sql_query(query, conn)
     conn.close()
 
     return df.dropna()

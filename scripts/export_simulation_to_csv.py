@@ -145,9 +145,11 @@ import pandas as pd
 
 # ── Repository roots ──────────────────────────────────────────────────────────
 # This script lives in scripts/. Data and DB live at the project root.
-REPO_ROOT    = Path(__file__).resolve().parent.parent
-DB_PATH      = REPO_ROOT / "simulation.db"
-DEFAULT_CSV  = REPO_ROOT / "data" / "ai4i2020.csv"
+# The output is Parquet rather than CSV: same column names and values, but
+# columnar and compressed — DVC tracks it the same way, just a different hash.
+REPO_ROOT      = Path(__file__).resolve().parent.parent
+DB_PATH        = REPO_ROOT / "simulation.db"
+DEFAULT_OUTPUT = REPO_ROOT / "data" / "ai4i2020.parquet"  # Parquet replaces the growing CSV
 
 # ── Failure type derivation thresholds ───────────────────────────────────────
 # From Matzka (2020) — the same rules used to generate the original labels.
@@ -338,22 +340,22 @@ def convert_to_csv_format(sim_df: pd.DataFrame, starting_udi: int) -> pd.DataFra
 # check=True raises CalledProcessError on a non-zero exit code, which stops
 # the sequence and prints the failing command's stderr so the cause is clear.
 
-def _push_to_remote(csv_path: Path, n_rows: int, trigger_retrain: bool = False) -> None:
+def _push_to_remote(data_path: Path, n_rows: int, trigger_retrain: bool = False) -> None:
     """Run dvc add/push and git commit/push to update the training dataset.
 
     When trigger_retrain is True, retrain.trigger is also updated and staged.
-    GitHub Actions watches that file, not the .dvc pointer — so a CSV push
+    GitHub Actions watches that file, not the .dvc pointer — so a data push
     without trigger_retrain accumulates data silently with no workflow fired.
-    A CSV push with trigger_retrain updates both files in the same commit,
+    A push with trigger_retrain updates both files in the same commit,
     which causes the workflow to run.
 
     Args:
-        csv_path:        Path to the CSV that was just written.
+        data_path:       Path to the Parquet file that was just written.
         n_rows:          Number of newly exported rows (used in the commit message).
         trigger_retrain: True → update retrain.trigger and fire GitHub Actions.
-                         False → push CSV only, no workflow triggered.
+                         False → push data only, no workflow triggered.
     """
-    dvc_pointer     = Path(str(csv_path) + ".dvc")              # data/ai4i2020.csv.dvc
+    dvc_pointer     = Path(str(data_path) + ".dvc")             # data/ai4i2020.parquet.dvc
     retrain_trigger = REPO_ROOT / "retrain.trigger"             # project-root sentinel file
 
     if trigger_retrain:
@@ -367,8 +369,8 @@ def _push_to_remote(csv_path: Path, n_rows: int, trigger_retrain: bool = False) 
         git_add_targets = [str(dvc_pointer)]                     # retrain.trigger unchanged → no workflow
 
     steps = [
-        (["dvc", "add",  str(csv_path)],                "Updating .dvc pointer"),
-        (["dvc", "push", str(csv_path)],                "Uploading CSV to DagsHub"),
+        (["dvc", "add",  str(data_path)],               "Updating .dvc pointer"),
+        (["dvc", "push", str(data_path)],               "Uploading Parquet to DagsHub"),
         (["git", "add"] + git_add_targets,              "Staging files"),
         (["git", "commit", "-m", commit_msg],           "Committing"),
         (["git", "push"],                               "Pushing to GitHub"),
@@ -396,9 +398,9 @@ def _push_to_remote(csv_path: Path, n_rows: int, trigger_retrain: bool = False) 
 @click.command()
 @click.option(
     "--output", "output_path",
-    default=str(DEFAULT_CSV),
+    default=str(DEFAULT_OUTPUT),
     show_default=True,
-    help="Destination CSV path. Defaults to data/ai4i2020.csv.",
+    help="Destination Parquet path. Defaults to data/ai4i2020.parquet.",
 )
 @click.option(
     "--db", "db_path",
@@ -494,13 +496,13 @@ def main(
 
     # ── Determine starting UDI ─────────────────────────────────────────────────
     if append and output.exists():
-        existing = pd.read_csv(output, usecols=["UDI"])
+        existing = pd.read_parquet(output, columns=["UDI"])  # Parquet: load only the UDI column
         last_udi = int(existing["UDI"].max())
-        click.echo(f"  Existing CSV: {len(existing):,} rows, last UDI = {last_udi}")
+        click.echo(f"  Existing Parquet: {len(existing):,} rows, last UDI = {last_udi}")
         starting_udi = last_udi + 1
     else:
         starting_udi = 1
-        click.echo("  No existing CSV found (or --no-append set). Starting UDI at 1.")
+        click.echo("  No existing Parquet found (or --no-append set). Starting UDI at 1.")
 
     # ── Convert ────────────────────────────────────────────────────────────────
     export_df = convert_to_csv_format(sim_df, starting_udi)
@@ -531,14 +533,14 @@ def main(
 
     # ── Write ──────────────────────────────────────────────────────────────────
     if append and output.exists():
-        existing_full = pd.read_csv(output)
+        existing_full = pd.read_parquet(output)                       # load the full existing dataset
         combined      = pd.concat([existing_full, export_df], ignore_index=True)
-        combined.to_csv(output, index=False)
+        combined.to_parquet(output, index=False)                      # overwrite with combined rows
         click.echo(f"\nAppended {len(export_df):,} rows → {output}")
-        click.echo(f"  Total rows in CSV   : {len(combined):,}")
+        click.echo(f"  Total rows in Parquet: {len(combined):,}")
     else:
         output.parent.mkdir(parents=True, exist_ok=True)
-        export_df.to_csv(output, index=False)
+        export_df.to_parquet(output, index=False)                     # write first batch
         click.echo(f"\nWrote {len(export_df):,} rows → {output}")
 
     # ── Purge ──────────────────────────────────────────────────────────────────
@@ -557,9 +559,9 @@ def main(
         _push_to_remote(output, len(export_df), trigger_retrain=retrain)
     else:
         click.echo("\nNext steps:")
-        click.echo("  dvc add data/ai4i2020.csv")
-        click.echo("  dvc push data/ai4i2020.csv")
-        click.echo("  git add data/ai4i2020.csv.dvc      # data only — no retrain")
+        click.echo("  dvc add data/ai4i2020.parquet")
+        click.echo("  dvc push data/ai4i2020.parquet")
+        click.echo("  git add data/ai4i2020.parquet.dvc  # data only — no retrain")
         click.echo("  # or also: git add retrain.trigger  # include to trigger retrain workflow")
         click.echo('  git commit -m "data: add N simulated observations"')
         click.echo("  git push")
