@@ -78,10 +78,12 @@ jobs:
           dvc remote modify origin --local password ${{ secrets.DAGSHUB_TOKEN }}
 
       # Step 5 - Download the training data
-      # dvc pull reads the .dvc pointer files and downloads the actual CSVs
-      # from DagsHub. Without this step the CSV files do not exist in the VM.
+      # dvc pull reads the .dvc pointer files and downloads the actual files
+      # from DagsHub. Without this step the data files do not exist in the VM.
+      # The pipeline trains from ai4i2020.parquet (switched from CSV); the
+      # baseline is still CSV and is used by detect_drift.py for comparison.
       - name: Pull training data from DVC remote
-        run: dvc pull data/ai4i2020.csv data/ai4i2020_baseline.csv
+        run: dvc pull data/ai4i2020.parquet data/ai4i2020_baseline.csv
 
       # Step 6 - Run the training pipeline
       # Only the two XGBoost stages are retrained here — these are the model
