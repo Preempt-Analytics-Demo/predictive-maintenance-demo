@@ -69,7 +69,8 @@ The two loops are intentionally decoupled. The API serves the current `@producti
 ├── scripts/
 │   ├── detect_drift.py            # Evidently AI: simulation.db vs baseline CSV
 │   ├── export_simulation_to_parquet.py # ETL: simulation.db → AI4I Parquet format → DagsHub
-│   └── promote_model.py           # Two-gate promotion: improvement + floor → @production
+│   ├── promote_model.py           # Two-gate promotion: improvement + floor → @production
+│   └── monitor.py                 # Scheduled drift checks — automates detect → export → retrain
 ├── .github/workflows/
 │   └── retrain.yml                # Triggered by retrain.trigger; retrains XGBoost + promotes
 ├── retrain.trigger                # Sentinel file — updated on drift; GitHub Actions watches this
@@ -189,6 +190,47 @@ python src/sensor_simulator.py --reset --n-readings 1000 --mode normal
 
 # Slow it down for a live demo
 python src/sensor_simulator.py --n-readings 200 --mode normal --interval 1.0
+```
+
+---
+
+## Automatic drift monitoring
+
+`monitor.py` checks for drift on a schedule, so you don't have to run `detect_drift.py` by hand after every simulation. When it finds drift, it exports the data, pushes it to DagsHub, and triggers the GitHub Actions retrain workflow — the same sequence as `--detect-drift --export-on-drift` above, just running unattended in the background.
+
+**Run it locally (Terminal 3, alongside the API and simulator):**
+
+```bash
+python scripts/monitor.py
+```
+
+**Run it in Docker (starts automatically with the API):**
+
+```bash
+docker compose up monitor
+```
+
+**What happens on each check:**
+
+1. Runs `detect_drift.py` against `simulation.db`
+2. **No drift** → logs a PASS, waits for the next scheduled check
+3. **Drift detected** → runs `export_simulation_to_parquet.py --purge --push --retrain`, which pushes the new data to DagsHub and fires the retrain workflow
+
+**Where to look:**
+
+| What | Where |
+|------|-------|
+| Result of every check (drift yes/no, retrain fired yes/no) | `reports/monitor_log.jsonl` — one line per run, never overwritten |
+| Drift report (written when drift is detected) | `reports/drift_report.html` |
+
+**Check interval:** set inside `scripts/monitor.py`. Ships with a 5-minute interval for demos — switch to the daily schedule before deploying:
+
+```python
+# Demo (ships enabled):
+schedule.every(5).minutes.do(check_drift)
+
+# Production — comment out the line above, uncomment this one:
+schedule.every().day.at("02:00").do(check_drift)
 ```
 
 ---
