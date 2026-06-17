@@ -66,7 +66,17 @@ jobs:
       - name: Install Python dependencies
         run: pip install -r requirements.txt
 
-      # Step 4 - Give DVC access to the remote storage
+      # Step 4 - Run the test suite
+      # Every test here is offline — no DVC pull, no MLflow connection, no real
+      # data — so this runs before either is configured. Catching a broken
+      # feature contract, API schema, promotion gate, or training pipeline here
+      # costs seconds. Catching the same bug at Step 7 (after dvc pull, after
+      # dvc repro) costs minutes and a confusing stack trace, the way the RNF
+      # class-gap bug did before this step existed.
+      - name: Run test suite
+        run: pytest tests/ -v
+
+      # Step 5 - Give DVC access to the remote storage
       # DVC stores large files (the training CSV) on DagsHub, not in Git.
       # In local dev, credentials live in .dvc/config.local (gitignored).
       # In CI, we write them from GitHub Secrets at runtime.
@@ -77,7 +87,7 @@ jobs:
           dvc remote modify origin --local user ${{ secrets.DAGSHUB_USERNAME }}
           dvc remote modify origin --local password ${{ secrets.DAGSHUB_TOKEN }}
 
-      # Step 5 - Download the training data
+      # Step 6 - Download the training data
       # dvc pull reads the .dvc pointer files and downloads the actual files
       # from DagsHub. Without this step the data files do not exist in the VM.
       # The pipeline trains from ai4i2020.parquet (switched from CSV); the
@@ -88,7 +98,7 @@ jobs:
           echo "--- workspace data/ after pull ---"
           ls -lh data/                                 # confirm the parquet file actually landed
 
-      # Step 6 - Run the training pipeline
+      # Step 7 - Run the training pipeline
       # Only the two XGBoost stages are retrained here — these are the model
       # families currently registered under @production. Running all 12 DVC
       # stages on every data push would retrain SVM, MLP, and four other
@@ -102,7 +112,7 @@ jobs:
           MLFLOW_TRACKING_PASSWORD: ${{ secrets.DAGSHUB_TOKEN }}
         run: dvc repro train_xgb_binary train_xgb_multiclass
 
-      # Step 7 - Promote model to production
+      # Step 8 - Promote model to production
       # promote_model.py compares the newly registered version against the
       # current @production version using two gates:
       #   Gate 1 — improvement: new f1_test must beat current @production f1_test
@@ -144,8 +154,8 @@ jobs:
             echo "any_promoted=false" >> "$GITHUB_OUTPUT"
           fi
 
-      # Step 8 - Reload the serving API (conditional)
-      # Only runs when at least one model was promoted in Step 7.
+      # Step 9 - Reload the serving API (conditional)
+      # Only runs when at least one model was promoted in Step 8.
       # Requires an API_URL secret pointing to the deployed serving layer.
       # If API_URL is not set (local dev), the step prints a manual instruction
       # instead of failing — the workflow stays green either way.
