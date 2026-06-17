@@ -87,6 +87,27 @@ def get_latest_version(client: MlflowClient, model_name: str) -> str | None:
     return str(max(int(mv.version) for mv in versions))
 
 
+def evaluate_gates(new_f1: float, prod_f1: float | None, min_f1: float) -> tuple[bool, bool]:
+    """Decide whether a candidate version passes both promotion gates.
+
+    Pulled out of main() as its own function so the decision logic can be
+    tested directly with plain numbers — no MLflow connection required.
+    Both gates must pass for --auto to move the @production alias.
+
+    Args:
+        new_f1:  f1_test of the candidate version being considered.
+        prod_f1: f1_test of the version currently @production, or None if
+                 no version has ever been promoted (first-ever promotion).
+        min_f1:  Minimum acceptable f1_test for this model family.
+
+    Returns:
+        (gate_improvement, gate_floor) — both True means promote.
+    """
+    gate_improvement = (prod_f1 is None) or (new_f1 > prod_f1)  # no current model = automatic pass
+    gate_floor       = new_f1 >= min_f1                          # absolute floor, independent of comparison
+    return gate_improvement, gate_floor
+
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 @click.command()
@@ -173,8 +194,7 @@ def main(model_name: str, min_f1: float | None, auto: bool) -> None:
     # ── Evaluate gates ─────────────────────────────────────────────────────────
     # Gate 1: new model must be strictly better than the current production model.
     # Gate 2: new model must clear the minimum F1 floor regardless of comparison.
-    gate_improvement = (prod_f1 is None) or (new_f1 > prod_f1)
-    gate_floor       = new_f1 >= min_f1
+    gate_improvement, gate_floor = evaluate_gates(new_f1, prod_f1, min_f1)
 
     improvement_str = (
         "PASS (no current production version)"
