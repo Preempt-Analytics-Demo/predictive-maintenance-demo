@@ -1,0 +1,4 @@
+# Test-only tooling — never installed into the Docker image (see the note
+# at the top of requirements.txt: dev tools are kept out to stay lean).
+# CI installs this on top of requirements.txt before running pytest.
+pytest==7.4.0

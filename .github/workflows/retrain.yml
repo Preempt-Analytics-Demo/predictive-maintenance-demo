@@ -73,8 +73,16 @@ jobs:
       # costs seconds. Catching the same bug at Step 7 (after dvc pull, after
       # dvc repro) costs minutes and a confusing stack trace, the way the RNF
       # class-gap bug did before this step existed.
+      #
+      # pytest is installed here, not in requirements.txt — requirements.txt
+      # is also what the Docker image installs, and dev/test tooling is kept
+      # out of that image deliberately (see the comment at the top of that
+      # file). requirements-dev.txt holds test-only dependencies and is only
+      # ever installed here, in CI.
       - name: Run test suite
-        run: pytest tests/ -v
+        run: |
+          pip install -r requirements-dev.txt
+          pytest tests/ -v
 
       # Step 5 - Give DVC access to the remote storage
       # DVC stores large files (the training CSV) on DagsHub, not in Git.
