@@ -138,7 +138,7 @@ def check_drift() -> None:
 # schedule.every().day.at("02:00").do(check_drift)
 #
 # Demo (comment out when deploying):
-schedule.every(5).minutes.do(check_drift)
+schedule.every(1).minutes.do(check_drift)
 
 
 # ── Main loop ─────────────────────────────────────────────────────────────────
