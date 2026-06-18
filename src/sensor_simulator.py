@@ -339,7 +339,7 @@ def check_api_health(api_url: str) -> None:
     print(f"  API status  : {data.get('status')}")
 
 
-def call_predict_api(api_url: str, raw: dict) -> tuple[int, str | None, float]:
+def call_predict_api(client: httpx.Client, api_url: str, raw: dict) -> tuple[int, str | None, float]:
     """Send one sensor reading to POST /predict and return the prediction.
 
     What this function does step by step:
@@ -351,6 +351,11 @@ def call_predict_api(api_url: str, raw: dict) -> tuple[int, str | None, float]:
          response format — it just gets (predicted, type, probability).
 
     Args:
+        client:  Shared httpx.Client, reused across every reading in the run.
+                 A fresh connection per call (the old httpx.post() module-level
+                 function) exhausts Windows' ephemeral port range after a few
+                 thousand readings — closed sockets sit in TIME_WAIT for ~120s,
+                 and a long run opens requests faster than they're released.
         api_url: Base URL of the running FastAPI server.
         raw:     Dict with original CSV column names from generate_raw_reading().
 
@@ -377,14 +382,16 @@ def call_predict_api(api_url: str, raw: dict) -> tuple[int, str | None, float]:
         "tool_wear_minutes":          raw["Tool wear [min]"],
     }
 
-    # httpx.post(json=payload) does three things automatically:
+    # client.post(json=payload) does three things automatically:
     #   1. Converts the dict to a JSON string.
     #   2. Sets the Content-Type header to "application/json".
     #   3. Sends the HTTP POST request to the URL.
     # timeout=10.0: if the API takes longer than 10 seconds, raise an exception.
     # In a production loop, a hanging request without a timeout would freeze
-    # the entire simulation indefinitely.
-    response = httpx.post(f"{api_url}/predict", json=payload, timeout=10.0)
+    # the entire simulation indefinitely. Using the shared client (not the
+    # httpx.post() module-level function) reuses one TCP connection via
+    # keep-alive instead of opening a new socket for every single reading.
+    response = client.post(f"{api_url}/predict", json=payload, timeout=10.0)
     response.raise_for_status()     # turn HTTP error codes into Python exceptions
 
     # response.json() decodes the response body from JSON → Python dict:
@@ -589,85 +596,94 @@ def run_simulation(
     machine_ids  = [f"machine_{i+1:02d}" for i in range(n_machines)]
     machine_wear = {m: random.uniform(0, TOOL_WEAR_MAX_MINUTES) for m in machine_ids}
 
-    for i in range(n_readings):
+    # One client, reused for every reading via HTTP keep-alive — see the
+    # call_predict_api docstring for why a fresh connection per call exhausts
+    # Windows' ephemeral port range on long runs.
+    with httpx.Client() as client:
+        for i in range(n_readings):
 
-        # ── Pick a machine and compute this reading's failure probability ───────
-        machine_id = random.choice(machine_ids)
-        tool_wear  = machine_wear[machine_id]
-        rate           = compute_failure_rate(mode, i, n_readings)
-        inject_failure = random.random() < rate  # True if random draw falls below the rate
+            # ── Pick a machine and compute this reading's failure probability ───
+            machine_id = random.choice(machine_ids)
+            tool_wear  = machine_wear[machine_id]
+            rate           = compute_failure_rate(mode, i, n_readings)
+            inject_failure = random.random() < rate  # True if random draw falls below the rate
 
-        # ── Generate raw sensor values ─────────────────────────────────────────
-        raw = generate_raw_reading(tool_wear, inject_failure)
+            # ── Generate raw sensor values ───────────────────────────────────────
+            raw = generate_raw_reading(tool_wear, inject_failure)
 
-        # ── Compute engineered features FOR STORAGE ONLY ───────────────────────
-        # The API will compute these again internally for inference. We compute
-        # them here separately so we can store them in simulation.db, where
-        # drift detection scripts can query them without re-running engineering.
-        # This is intentional duplication — two different purposes for the same values.
-        df_features = engineer_features(pd.DataFrame([raw]))
+            # ── Compute engineered features FOR STORAGE ONLY ────────────────────
+            # The API will compute these again internally for inference. We compute
+            # them here separately so we can store them in simulation.db, where
+            # drift detection scripts can query them without re-running engineering.
+            # This is intentional duplication — two different purposes for the same values.
+            df_features = engineer_features(pd.DataFrame([raw]))
 
-        # ── Send to API and get prediction ─────────────────────────────────────
-        # This is the core change: instead of calling model.predict() locally,
-        # we POST the reading to the serving layer and receive the prediction
-        # as a JSON response. The API handles feature engineering for inference.
-        try:
-            predicted, predicted_type, failure_prob = call_predict_api(api_url, raw)
-        except httpx.TimeoutException:
-            print(f"  [reading {i+1}] WARNING: API timeout — skipping this reading.")
-            continue
-        except httpx.HTTPStatusError as exc:
-            print(f"  [reading {i+1}] WARNING: API error {exc.response.status_code} — skipping.")
-            continue
+            # ── Send to API and get prediction ───────────────────────────────────
+            # This is the core change: instead of calling model.predict() locally,
+            # we POST the reading to the serving layer and receive the prediction
+            # as a JSON response. The API handles feature engineering for inference.
+            try:
+                predicted, predicted_type, failure_prob = call_predict_api(client, api_url, raw)
+            except httpx.TimeoutException:
+                print(f"  [reading {i+1}] WARNING: API timeout — skipping this reading.")
+                continue
+            except httpx.HTTPStatusError as exc:
+                print(f"  [reading {i+1}] WARNING: API error {exc.response.status_code} — skipping.")
+                continue
+            except httpx.ConnectError as exc:
+                # Transient connection hiccup (e.g. a momentary port/socket issue) —
+                # skip this one reading instead of crashing a run thousands deep.
+                print(f"  [reading {i+1}] WARNING: connection error ({exc}) — skipping.")
+                continue
 
-        # ── Detect binary vs multiclass from the response ──────────────────────
-        # The API determines which target type it's running — the simulator
-        # no longer needs a --target flag. We infer it from the response:
-        # failure_type is None for binary models, a string for multiclass.
-        target = "binary" if predicted_type is None else "multiclass"
+            # ── Detect binary vs multiclass from the response ───────────────────
+            # The API determines which target type it's running — the simulator
+            # no longer needs a --target flag. We infer it from the response:
+            # failure_type is None for binary models, a string for multiclass.
+            target = "binary" if predicted_type is None else "multiclass"
 
-        # ── Store the full row in SQLite ───────────────────────────────────────
-        row = {
-            "timestamp":                  datetime.now(timezone.utc).isoformat(),
-            "reading_number":             i + 1,
-            "machine_id":                 machine_id,
-            "machine_type":               raw["Type"],
-            "air_temperature_kelvin":     raw["Air temperature [K]"],
-            "process_temperature_kelvin": raw["Process temperature [K]"],
-            "rotational_speed_rpm":       raw["Rotational speed [rpm]"],
-            "torque_nm":                  raw["Torque [Nm]"],
-            "tool_wear_minutes":          raw["Tool wear [min]"],
-            # Engineered features — computed locally above, stored for drift detection
-            "power_kw":                   float(df_features["power_kw"].iloc[0]),
-            "temp_diff_kelvin":           float(df_features["temp_diff_kelvin"].iloc[0]),
-            "mechanical_stress":          float(df_features["mechanical_stress"].iloc[0]),
-            # Prediction from the API
-            "predicted_failure":          predicted,
-            "predicted_failure_type":     predicted_type,
-            "failure_probability":        failure_prob,
-            # Ground truth from the simulator
-            "injected_failure":           int(inject_failure),
-            # Metadata
-            "mode":                       mode,
-            "target":                     target,   # derived from API response
-            "effective_failure_rate":     rate,
-        }
-        store_reading(conn, row)
+            # ── Store the full row in SQLite ─────────────────────────────────────
+            row = {
+                "timestamp":                  datetime.now(timezone.utc).isoformat(),
+                "reading_number":             i + 1,
+                "machine_id":                 machine_id,
+                "machine_type":               raw["Type"],
+                "air_temperature_kelvin":     raw["Air temperature [K]"],
+                "process_temperature_kelvin": raw["Process temperature [K]"],
+                "rotational_speed_rpm":       raw["Rotational speed [rpm]"],
+                "torque_nm":                  raw["Torque [Nm]"],
+                "tool_wear_minutes":          raw["Tool wear [min]"],
+                # Engineered features — computed locally above, stored for drift detection
+                "power_kw":                   float(df_features["power_kw"].iloc[0]),
+                "temp_diff_kelvin":           float(df_features["temp_diff_kelvin"].iloc[0]),
+                "mechanical_stress":          float(df_features["mechanical_stress"].iloc[0]),
+                # Prediction from the API
+                "predicted_failure":          predicted,
+                "predicted_failure_type":     predicted_type,
+                "failure_probability":        failure_prob,
+                # Ground truth from the simulator
+                "injected_failure":           int(inject_failure),
+                # Metadata
+                "mode":                       mode,
+                "target":                     target,   # derived from API response
+                "effective_failure_rate":     rate,
+            }
+            store_reading(conn, row)
 
-        # ── Print status line ──────────────────────────────────────────────────
-        print_reading(
-            i + 1, machine_id, raw, failure_prob,
-            predicted, predicted_type, int(inject_failure), rate,
-        )
+            # ── Print status line ────────────────────────────────────────────────
+            print_reading(
+                i + 1, machine_id, raw, failure_prob,
+                predicted, predicted_type, int(inject_failure), rate,
+            )
 
-        # ── Advance tool wear; replace tool when limit is reached ──────────────
-        machine_wear[machine_id] += TOOL_WEAR_STEP_MINUTES
-        if machine_wear[machine_id] >= TOOL_WEAR_MAX_MINUTES:
-            machine_wear[machine_id] = 0.0
-            print(f"  ── {machine_id}: tool replaced, wear reset to 0 ──")
+            # ── Advance tool wear; replace tool when limit is reached ───────────
+            machine_wear[machine_id] += TOOL_WEAR_STEP_MINUTES
+            if machine_wear[machine_id] >= TOOL_WEAR_MAX_MINUTES:
+                machine_wear[machine_id] = 0.0
+                print(f"  ── {machine_id}: tool replaced, wear reset to 0 ──")
 
-        if interval > 0:
-            time.sleep(interval)
+            if interval > 0:
+                time.sleep(interval)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
