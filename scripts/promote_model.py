@@ -156,10 +156,14 @@ def main(model_name: str, min_f1: float | None, auto: bool) -> None:
     mlflow.set_tracking_uri(tracking_uri)
     client = MlflowClient()
 
-    mode_label = "AUTO PROMOTE" if auto else "MANUAL REVIEW (dry run)"
+    # Heading names the activity ("what is this"), not the mode — a reader
+    # scanning a CI log for "did it promote?" should find that answer in the
+    # Decision line below, not have to infer it from a mode flag up here.
+    mode_label = "Auto-promote if gates pass" if auto else "Manual review (dry run, no changes made)"
     print(f"\n{'='*60}")
-    print(f"  promote_model.py — {mode_label}")
+    print(f"  Model Promotion Assessment")
     print(f"  Model : {model_name}")
+    print(f"  Mode  : {mode_label}")
     print(f"  Min F1: {min_f1}")
     print(f"{'='*60}\n")
 
@@ -209,7 +213,10 @@ def main(model_name: str, min_f1: float | None, auto: bool) -> None:
 
     # ── Decide ─────────────────────────────────────────────────────────────────
     if not all_gates_pass:
-        print("  Decision: HOLD — one or more gates failed.")
+        # "NOT PROMOTED" (not "HOLD") — parallel wording with the PROMOTED
+        # line below means a reader scanning two runs side by side sees the
+        # opposite outcomes as opposites, not as two different vocabularies.
+        print("  Decision: NOT PROMOTED — one or more gates failed.")
         print("  The @production alias has NOT been moved.")
         if not auto:
             print("  (dry run — same result in --auto mode)")
