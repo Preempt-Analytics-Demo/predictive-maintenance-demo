@@ -428,8 +428,9 @@ Examples:
         else:
             print(f"  Next steps:")
             print(f"    1. Open the HTML report and check which features changed.")
-            print(f"    2. Run: python scripts/export_simulation_to_parquet.py --push --retrain")
-            print(f"       (or re-run detect_drift.py with --export-on-drift to do this automatically)")
+            print(f"    2. Export and retrain:")
+            print(f"         Automated  : monitor.py handles this automatically — no action needed.")
+            print(f"         Manual run : python scripts/export_simulation_to_parquet.py --push --retrain")
     else:
         print(f"\n  PASS — distribution looks stable. No retraining triggered.")
         if args.export_on_drift:
