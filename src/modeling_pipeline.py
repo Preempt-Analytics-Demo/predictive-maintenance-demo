@@ -167,6 +167,10 @@ class ExperimentConfig:
     # param_space is optional — only experiments that support tuning define it.
     # None means "this experiment has no search space; --tune will raise clearly."
     param_space: Optional[Callable] = None
+    # warm_start seeds Optuna's very first trial with a previously-found best
+    # config (via study.enqueue_trial in tune_model). None means "no prior
+    # tuning run to seed from yet" — Optuna falls back to cold random sampling.
+    warm_start: Optional[dict] = None
     # needs_scaling controls whether StandardScaler is inserted into the pipeline.
     # Tree models are invariant to feature scale; distance-based models are not.
     needs_scaling: bool = False
@@ -180,16 +184,29 @@ EXPERIMENTS: dict[str, ExperimentConfig] = {
         target="machine_failure",
         target_type="binary",
         metric_average="binary",
+        # Defaults below are the winning params from a 50-trial Optuna run
+        # (2026-06-22, CV f1_binary). Replaces the untuned 200/defaults config —
+        # re-run --tune periodically as simulation.db grows to keep these current.
         classifier_factory=lambda r: xgb.XGBClassifier(
-            n_estimators=200,
-            scale_pos_weight=r,
+            n_estimators=155,        # Optuna best (range 100-500, not at boundary)
+            max_depth=8,             # Optuna best — hit the old upper bound, see param_space note below
+            learning_rate=0.0856,    # Optuna best (log-scale range 0.01-0.3)
+            min_child_weight=1,      # Optuna best — hit the lower bound (1 is XGBoost's natural floor)
+            reg_lambda=0.2413,       # Optuna best (log-scale range 1e-3-10.0)
+            subsample=0.6472,        # Optuna best (range 0.5-1.0)
+            colsample_bytree=0.9604, # Optuna best (range 0.5-1.0)
+            scale_pos_weight=r,      # data-derived imbalance ratio — never hardcode this
             random_state=42,
             n_jobs=-1,
             eval_metric="logloss",
         ),
+        # max_depth's upper bound was raised 8 -> 12: the prior run's best value
+        # (8) landed exactly on the old ceiling, which means Optuna wanted to go
+        # deeper but couldn't. min_child_weight's lower bound is left at 1 since
+        # that's the parameter's natural floor, not a search-space artifact.
         param_space=lambda trial, r: dict(
             n_estimators      = trial.suggest_int("n_estimators", 100, 500),
-            max_depth         = trial.suggest_int("max_depth", 2, 8),
+            max_depth         = trial.suggest_int("max_depth", 2, 12),
             learning_rate     = trial.suggest_float("learning_rate", 0.01, 0.3, log=True),
             min_child_weight  = trial.suggest_int("min_child_weight", 1, 20),
             reg_lambda        = trial.suggest_float("reg_lambda", 1e-3, 10.0, log=True),
@@ -200,6 +217,17 @@ EXPERIMENTS: dict[str, ExperimentConfig] = {
             n_jobs            = -1,
             eval_metric       = "logloss",
         ),
+        # Seeds Optuna's first trial with this run's winning params so future
+        # searches start from a known-good point instead of cold sampling.
+        warm_start={
+            "n_estimators": 155,
+            "max_depth": 8,
+            "learning_rate": 0.0856,
+            "min_child_weight": 1,
+            "reg_lambda": 0.2413,
+            "subsample": 0.6472,
+            "colsample_bytree": 0.9604,
+        },
     ),
 
     "xgb_multiclass": ExperimentConfig(
@@ -901,6 +929,13 @@ def tune_model(
     # Create the study. "maximize" because higher F1 = better.
     # TPESampler is Optuna's default Bayesian sampler — not random search.
     study = optuna.create_study(direction="maximize")
+
+    # If a prior tuning run found good params, run that exact config as trial 0.
+    # TPE then builds its initial surrogate model around a known-good point
+    # instead of pure random sampling — converges faster than an unseeded search.
+    if config.warm_start is not None:
+        study.enqueue_trial(config.warm_start)
+
     study.optimize(objective, n_trials=n_trials, show_progress_bar=True)
 
     print(f"\nBest CV f1_{config.metric_average}: {study.best_value:.4f}")
@@ -1102,12 +1137,36 @@ def main(experiment: str, cml_run: bool, tune: bool, n_trials: int) -> None:
         }
 
         if config.model_family == "lightgbm":
+            # random_state/n_jobs/objective are fixed literals in param_space, not
+            # trial.suggest_* calls — Optuna's study.best_params never records them,
+            # so they must be re-added by hand here or the tuned model silently
+            # trains with LightGBM's defaults instead of this project's settings.
+            lgbm_fixed = {"objective": "multiclass"} if config.target_type == "multiclass" else {}
             config.classifier_factory = lambda r: lgb.LGBMClassifier(
-                **{**classifier_params, "scale_pos_weight": r if config.target_type == "binary" else 1.0}
+                **{
+                    **classifier_params,
+                    "scale_pos_weight": r if config.target_type == "binary" else 1.0,
+                    "random_state": 42,
+                    "n_jobs": -1,
+                    **lgbm_fixed,
+                }
             )
         elif config.model_family == "xgboost":
+            # Same gap as lightgbm above: eval_metric/objective never reach
+            # study.best_params, so they're restored explicitly here.
+            xgb_fixed = (
+                {"objective": "multi:softprob", "eval_metric": "mlogloss"}
+                if config.target_type == "multiclass"
+                else {"eval_metric": "logloss"}
+            )
             config.classifier_factory = lambda r: xgb.XGBClassifier(
-                **{**classifier_params, "scale_pos_weight": r if config.target_type == "binary" else 1.0}
+                **{
+                    **classifier_params,
+                    "scale_pos_weight": r if config.target_type == "binary" else 1.0,
+                    "random_state": 42,
+                    "n_jobs": -1,
+                    **xgb_fixed,
+                }
             )
         elif config.model_family == "svm":
             # probability=True re-enabled for the final model so predict_proba
