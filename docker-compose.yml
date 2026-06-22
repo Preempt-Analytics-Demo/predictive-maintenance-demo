@@ -5,6 +5,21 @@
 # HOW TO RUN multiple containers together as a system. It replaces a long
 # `docker run` command with a single `docker compose up`.
 #
+# TWO DEPLOYMENT MODES
+# This file serves two different contexts. The difference is one line per service:
+#
+#   Development (this repo — you and Nate):
+#     build: .          ← Docker builds the image locally from the Dockerfile
+#     env_file: .env    ← credentials are in your gitignored .env file
+#
+#   Demo (predictive-maintenance-demo repo — external users):
+#     image: ghcr.io/preempt-analytics/predictive-maintenance-capstone:latest
+#     env_file: .env    ← in the demo repo, .env is a copy of the committed .env.demo
+#
+#   In the demo repo, `build:` is replaced by `image:` so users pull a pre-built
+#   image from GitHub Container Registry instead of compiling everything locally.
+#   That is what makes the demo a three-command experience.
+#
 # HOW TO USE
 #   Start everything:          docker compose up
 #   Start in background:       docker compose up -d
@@ -27,7 +42,11 @@ services:
   # The FastAPI serving layer. Loads the @production model at startup and
   # answers POST /predict requests. This is the service external callers use.
   api:
-    build: .                            # build the image from Dockerfile in this directory
+    # DEVELOPMENT: build the image locally from the Dockerfile in this directory.
+    build: .
+    # DEMO REPO: replace the line above with the line below so users pull the
+    # pre-built image from GitHub Container Registry instead of building locally.
+    # image: ghcr.io/preempt-analytics/predictive-maintenance-capstone:latest
     container_name: preempt-api
     ports:
       # "host_port:container_port" — maps port 8000 on your machine to port 8000
@@ -36,43 +55,41 @@ services:
       - "8000:8000"
 
     env_file:
-      # TODO A — Environment variables
+      # Injects environment variables into the container from a file.
       # The API needs MLFLOW_TRACKING_URI, MLFLOW_TRACKING_USERNAME, and
-      # MLFLOW_TRACKING_PASSWORD to load the model from DagsHub at startup.
-      # env_file reads these from a file and injects them into the container.
-      # Your .env file already has these — it is gitignored and never committed.
+      # MLFLOW_TRACKING_PASSWORD to load the @production model from DagsHub.
       #
-      # If you want to verify the variables are correct before starting:
-      #   docker compose config
-      # This prints the resolved compose file with secrets substituted.
+      # Development: .env is gitignored — fill it in once from .env.example.
+      # Demo repo:   .env.demo is committed with read-only demo credentials.
+      #              Users run `cp .env.demo .env` before `docker compose up`.
+      #
+      # To verify variables are correct before starting: docker compose config
+      # This prints the resolved compose file with all variables substituted.
       - .env
 
     volumes:
-      # TODO B — Volumes
-      # A volume maps a path on your host machine to a path inside the container.
-      # Without a volume, files written inside the container disappear when it stops.
+      # A volume maps a directory on your host machine into the container.
+      # Without volumes, any file written inside the container disappears when
+      # it stops. With them, the data persists and is visible on both sides.
       #
-      # simulation.db lives inside data/ (data/simulation.db), so the single
-      # data volume below covers it automatically. All three services share the
-      # same host directory — no separate file mount needed.
-      #
-      # Syntax: "./host/path:/container/path"
-      # The left side is relative to this docker-compose.yml file.
-      # The right side must match where the code expects the directory (/app/data).
-      - ./data:/app/data
-      - ./reports:/app/reports        # drift reports written here are visible on the host
+      # simulation.db lives at data/simulation.db, so the single data/ volume
+      # below covers it. All three services share the same host directory —
+      # the simulator writes readings, the monitor reads them for drift detection.
+      - ./data:/app/data       # simulation.db + baseline CSV
+      - ./reports:/app/reports # drift reports written here are visible on the host
 
     healthcheck:
-      # Docker will call GET /health every 30 seconds and mark the container
-      # "healthy" when it returns HTTP 200. The monitor uses depends_on with
-      # condition: service_healthy to wait for the API before it starts.
+      # Docker calls GET /health every 30 seconds and marks the container
+      # "healthy" when it returns HTTP 200. The monitor and simulator use
+      # depends_on: condition: service_healthy — they will not start until
+      # this check passes, preventing predictions against an unloaded model.
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
-      interval: 30s                   # how often to check
-      timeout: 10s                    # how long to wait for a response
-      retries: 3                      # how many failures before marking unhealthy
-      start_period: 15s               # grace period on startup before checks begin
+      interval: 30s    # how often to check
+      timeout: 10s     # how long to wait for a response
+      retries: 3       # how many failures before marking unhealthy
+      start_period: 15s # grace period on startup before checks begin
 
-    restart: unless-stopped           # restart automatically if the container crashes
+    restart: unless-stopped  # restart automatically if the container crashes
 
 
   # ── Monitor ──────────────────────────────────────────────────────────────────
@@ -80,34 +97,51 @@ services:
   # simulation data and triggers the retraining pipeline via GitHub Actions.
   # Uses the same image as the API but overrides CMD with its own command.
   monitor:
-    build: .                          # same image — no separate Dockerfile needed
+    build: .
+    # DEMO REPO: same swap as the api service — replace build with image.
+    # image: ghcr.io/preempt-analytics/predictive-maintenance-capstone:latest
     container_name: preempt-monitor
-    command: ["python", "scripts/monitor.py"]   # overrides the CMD in Dockerfile
+    command: ["python", "scripts/monitor.py"]  # overrides the CMD in Dockerfile
 
     env_file:
-      - .env                          # needs MLflow credentials for drift detection
+      - .env  # needs MLflow credentials for model loading + git credentials for push
+
+    environment:
+      # Git needs an author identity to create commits inside the container.
+      # These are read from .env so the demo repo can commit them without
+      # hardcoding anything here. In the demo repo, .env.demo sets these to
+      # the bot account (e.g. GIT_AUTHOR_NAME=preempt-analytics-bot).
+      - GIT_AUTHOR_NAME=${GIT_AUTHOR_NAME:-Preempt Analytics}
+      - GIT_AUTHOR_EMAIL=${GIT_AUTHOR_EMAIL:-bot@preempt-analytics.com}
+      - GIT_COMMITTER_NAME=${GIT_AUTHOR_NAME:-Preempt Analytics}
+      - GIT_COMMITTER_EMAIL=${GIT_AUTHOR_EMAIL:-bot@preempt-analytics.com}
 
     volumes:
-      - ./data:/app/data                        # simulation.db + baseline CSV both live here
-      - ./reports:/app/reports                  # writes drift HTML reports here
+      - ./data:/app/data     # simulation.db + baseline CSV
+      - ./reports:/app/reports  # drift HTML reports
 
-      # TODO C — Git credentials for pushing the retrain trigger
-      # When drift is detected, monitor.py runs export and then needs to push
-      # to GitHub so GitHub Actions picks up the change and retrains.
-      # Inside the container, git has no credentials configured.
+      # ── Git access for the retrain push ────────────────────────────────────
+      # The Dockerfile excludes .git (see .dockerignore), so the container has
+      # no git repo by default. The monitor needs git to commit retrain.trigger
+      # and push to GitHub so GitHub Actions fires the retrain workflow.
       #
-      # The safest approach: mount your SSH key as a read-only volume.
-      # Uncomment these two lines and adjust the path to your key:
-      # - ~/.ssh/id_ed25519:/root/.ssh/id_ed25519:ro
-      # - ~/.ssh/known_hosts:/root/.ssh/known_hosts:ro
+      # Solution: mount .git from the host. This gives the container the full
+      # git history and the origin remote already pointing at the correct repo —
+      # the demo repo when cloned from predictive-maintenance-demo, the main
+      # repo when running locally in development.
       #
-      # Alternative: set GIT_AUTHOR_NAME, GIT_AUTHOR_EMAIL, and a GitHub PAT
-      # (personal access token) as environment variables in .env, then use
-      # HTTPS with the token in monitor.py's git push command.
+      # The push uses HTTPS credentials from GIT_REMOTE_URL in .env:
+      #   GIT_REMOTE_URL=https://<github-pat>@github.com/Preempt-analytics/predictive-maintenance-demo.git
+      # export_simulation_to_parquet.py reads this variable and calls
+      # `git remote set-url origin $GIT_REMOTE_URL` before pushing, so no
+      # SSH key setup is needed on the demo user's machine.
+      #
+      # Uncomment the line below to enable git push from the monitor container:
+      # - ./.git:/app/.git
 
     depends_on:
       api:
-        condition: service_healthy    # wait for the API to be ready before starting
+        condition: service_healthy  # wait for the API to be ready before starting
 
     restart: unless-stopped
 
@@ -120,32 +154,36 @@ services:
   #   docker compose run --rm simulator --mode normal --n-readings 500
   #   docker compose run --rm simulator --mode sudden-spike --n-readings 1000 --detect-drift
   #
-  # --rm automatically removes the container after it exits (keeps things tidy).
+  # --rm removes the container automatically after it exits (keeps things tidy).
   # Arguments after the service name are passed directly to sensor_simulator.py.
   simulator:
     build: .
+    # DEMO REPO: same swap as the other services.
+    # image: ghcr.io/preempt-analytics/predictive-maintenance-capstone:latest
     container_name: preempt-simulator
-    # TODO D — Complete the simulator command
-    # The entrypoint tells Docker what to run when this service starts.
-    # The arguments (--api-url etc.) are passed separately via `docker compose run`.
-    # Inside the Docker network, the API is reachable by its service name "api",
-    # not "127.0.0.1" — containers communicate over Docker's internal network.
+    # The entrypoint is the fixed part of the command — sensor_simulator.py with
+    # the API URL pre-configured. Arguments passed via `docker compose run` are
+    # appended after this (e.g. --mode normal --n-readings 500).
     #
-    # Replace the TODO below with the correct entrypoint:
+    # Why http://api:8000 and not http://localhost:8000?
+    # Inside Docker's network, containers reach each other by service name, not
+    # by localhost. "api" resolves to the api container's internal IP address.
+    # Using localhost here would mean "this simulator container" — the wrong target.
     entrypoint: ["python", "src/sensor_simulator.py", "--api-url", "http://api:8000"]
 
     env_file:
       - .env
 
     volumes:
-      - ./data:/app/data
+      - ./data:/app/data  # simulation.db is written here by the simulator
 
     depends_on:
       api:
-        condition: service_healthy    # simulator needs the API running to send predictions
+        condition: service_healthy  # simulator needs the API running to send predictions
 
     profiles:
       # "profiles" means this service is NOT started by `docker compose up`.
-      # It only starts when explicitly requested with `docker compose run simulator`.
-      # This prevents the simulator from running in the background consuming resources.
+      # It only runs when explicitly requested: `docker compose run simulator ...`
+      # This prevents the simulator from running in the background consuming
+      # resources when you just want the API and monitor running.
       - tools
