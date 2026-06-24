@@ -5,26 +5,14 @@
 # HOW TO RUN multiple containers together as a system. It replaces a long
 # `docker run` command with a single `docker compose up`.
 #
-# TWO DEPLOYMENT MODES
-# This file serves two different contexts. The difference is one line per service:
-#
-#   Development (this repo — you and Nate):
-#     build: .          ← Docker builds the image locally from the Dockerfile
-#     env_file: .env    ← credentials are in your gitignored .env file
-#
-#   Demo (predictive-maintenance-demo repo — external users):
-#     image: ghcr.io/preempt-analytics/predictive-maintenance-capstone:latest
-#     env_file: .env    ← in the demo repo, .env is a copy of the committed .env.demo
-#
-#   In the demo repo, `build:` is replaced by `image:` so users pull a pre-built
-#   image from GitHub Container Registry instead of compiling everything locally.
-#   That is what makes the demo a three-command experience.
+# DEMO DEPLOYMENT
+# This file pulls the pre-built image from GitHub Container Registry — no local
+# build needed. Credentials are pre-filled in .env.demo, which is committed to
+# this repo so external users need zero setup steps.
 #
 # HOW TO USE
-#   Start everything:          docker compose up
-#   Start in background:       docker compose up -d
+#   Start everything:          docker compose up -d
 #   Stop everything:           docker compose down
-#   Rebuild after code change: docker compose up --build
 #   Run the simulator once:    docker compose run --rm simulator --mode sudden-spike --n-readings 500
 #   View logs:                 docker compose logs -f
 #   View one service's logs:   docker compose logs -f api
@@ -42,11 +30,7 @@ services:
   # The FastAPI serving layer. Loads the @production model at startup and
   # answers POST /predict requests. This is the service external callers use.
   api:
-    # DEVELOPMENT: build the image locally from the Dockerfile in this directory.
-    build: .
-    # DEMO REPO: replace the line above with the line below so users pull the
-    # pre-built image from GitHub Container Registry instead of building locally.
-    # image: ghcr.io/preempt-analytics/predictive-maintenance-capstone:latest
+    image: ghcr.io/preempt-analytics/predictive-maintenance-capstone:latest
     container_name: preempt-api
     ports:
       # "host_port:container_port" — maps port 8000 on your machine to port 8000
@@ -59,13 +43,12 @@ services:
       # The API needs MLFLOW_TRACKING_URI, MLFLOW_TRACKING_USERNAME, and
       # MLFLOW_TRACKING_PASSWORD to load the @production model from DagsHub.
       #
-      # Development: .env is gitignored — fill it in once from .env.example.
-      # Demo repo:   .env.demo is committed with read-only demo credentials.
-      #              Users run `cp .env.demo .env` before `docker compose up`.
+      # .env.demo is committed to this repo with all demo credentials pre-filled.
+      # No copy step needed — docker compose reads it directly.
       #
       # To verify variables are correct before starting: docker compose config
       # This prints the resolved compose file with all variables substituted.
-      - .env
+      - .env.demo
 
     volumes:
       # A volume maps a directory on your host machine into the container.
@@ -97,14 +80,12 @@ services:
   # simulation data and triggers the retraining pipeline via GitHub Actions.
   # Uses the same image as the API but overrides CMD with its own command.
   monitor:
-    build: .
-    # DEMO REPO: same swap as the api service — replace build with image.
-    # image: ghcr.io/preempt-analytics/predictive-maintenance-capstone:latest
+    image: ghcr.io/preempt-analytics/predictive-maintenance-capstone:latest
     container_name: preempt-monitor
     command: ["python", "scripts/monitor.py"]  # overrides the CMD in Dockerfile
 
     env_file:
-      - .env  # needs MLflow credentials for model loading + git credentials for push
+      - .env.demo  # MLflow credentials + GIT_REMOTE_URL for the PAT-authenticated push
 
     environment:
       # Git needs an author identity to create commits inside the container.
@@ -136,8 +117,9 @@ services:
       # `git remote set-url origin $GIT_REMOTE_URL` before pushing, so no
       # SSH key setup is needed on the demo user's machine.
       #
-      # Uncomment the line below to enable git push from the monitor container:
-      # - ./.git:/app/.git
+      # Mounted so the monitor container can commit and push retrain.trigger
+      # to this repo, which triggers the GitHub Actions retrain workflow.
+      - ./.git:/app/.git
 
     depends_on:
       api:
@@ -157,9 +139,7 @@ services:
   # --rm removes the container automatically after it exits (keeps things tidy).
   # Arguments after the service name are passed directly to sensor_simulator.py.
   simulator:
-    build: .
-    # DEMO REPO: same swap as the other services.
-    # image: ghcr.io/preempt-analytics/predictive-maintenance-capstone:latest
+    image: ghcr.io/preempt-analytics/predictive-maintenance-capstone:latest
     container_name: preempt-simulator
     # The entrypoint is the fixed part of the command — sensor_simulator.py with
     # the API URL pre-configured. Arguments passed via `docker compose run` are
@@ -172,7 +152,7 @@ services:
     entrypoint: ["python", "src/sensor_simulator.py", "--api-url", "http://api:8000"]
 
     env_file:
-      - .env
+      - .env.demo
 
     volumes:
       - ./data:/app/data  # simulation.db is written here by the simulator
