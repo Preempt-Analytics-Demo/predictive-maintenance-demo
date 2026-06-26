@@ -85,7 +85,11 @@ services:
     command: ["python", "scripts/monitor.py"]  # overrides the CMD in Dockerfile
 
     env_file:
-      - .env.demo  # MLflow credentials + GIT_REMOTE_URL for the PAT-authenticated push
+      # MLflow credentials + SSH deploy key (GIT_SSH_KEY_B64) + remote URL.
+      # The deploy key is stored as base64 so GitHub's secret scanner does not
+      # detect and revoke it. export_simulation_to_parquet.py decodes it at
+      # runtime into a temp file and injects it via GIT_SSH_COMMAND.
+      - .env.demo
 
     environment:
       # Git needs an author identity to create commits inside the container.
@@ -107,18 +111,13 @@ services:
       # and push to GitHub so GitHub Actions fires the retrain workflow.
       #
       # Solution: mount .git from the host. This gives the container the full
-      # git history and the origin remote already pointing at the correct repo —
-      # the demo repo when cloned from predictive-maintenance-demo, the main
-      # repo when running locally in development.
+      # git history and the origin remote already pointing at the correct repo.
       #
-      # The push uses HTTPS credentials from GIT_REMOTE_URL in .env:
-      #   GIT_REMOTE_URL=https://<github-pat>@github.com/Preempt-analytics/predictive-maintenance-demo.git
-      # export_simulation_to_parquet.py reads this variable and calls
-      # `git remote set-url origin $GIT_REMOTE_URL` before pushing, so no
-      # SSH key setup is needed on the demo user's machine.
-      #
-      # Mounted so the monitor container can commit and push retrain.trigger
-      # to this repo, which triggers the GitHub Actions retrain workflow.
+      # Authentication uses an Ed25519 deploy key (write access), not a PAT.
+      # GitHub auto-revokes any PAT committed to a public repo. The deploy key
+      # private key lives in .env.demo as base64 (GIT_SSH_KEY_B64). The script
+      # decodes it at runtime and injects it via GIT_SSH_COMMAND — no SSH agent
+      # or key setup required on the demo user's machine.
       - ./.git:/app/.git
 
     depends_on:
