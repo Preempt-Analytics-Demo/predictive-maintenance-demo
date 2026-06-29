@@ -38,35 +38,21 @@ cd predictive-maintenance-demo
 # 2. Start the prediction API and the drift monitor
 docker compose up -d
 
-# 3. Generate sensor readings
+# 3. Smoke test — verify the simulation engine is talking to the prediction API
 docker compose run --rm simulator --mode normal --n-readings 500
 ```
 
-That's it. The system is now running.
-
 **What just happened:**
 - Step 2 started two background services: the prediction API (port 8000) and the drift monitor
-- Step 3 sent 500 simulated sensor readings through the API and stored the predictions
+- Step 3 confirmed they are connected — 500 sensor readings were routed through the API, predictions were made, and results were stored
+
+If you saw a stream of readings ending with `Done — 500 readings stored`, the system is working correctly.
 
 ---
 
-## Check the API is working
+## You're set up — now see the ML pipeline in action
 
-Open a new terminal and run:
-
-```bash
-curl http://localhost:8000/health
-```
-
-You should see something like: `{"status": "ok", "model_loaded": true}`
-
-You can also send a prediction request directly:
-
-```bash
-curl -X POST http://localhost:8000/predict \
-  -H "Content-Type: application/json" \
-  -d '{"Type": "M", "Air temperature [K]": 298.1, "Process temperature [K]": 308.6, "Rotational speed [rpm]": 1551, "Torque [Nm]": 42.8, "Tool wear [min]": 0}'
-```
+Steps 1–3 confirmed the system is running and the simulation engine is connected to the prediction API. Now let's put it through its paces: trigger the full retraining loop and watch the model update itself.
 
 ---
 
@@ -87,6 +73,28 @@ docker compose logs -f monitor
 When drift is detected, the monitor pushes new training data to the cloud and fires a GitHub Actions workflow that retrains the model. You can watch the workflow run live in the **Actions** tab of this GitHub repository.
 
 A drift report is saved to `reports/drift_report.html` — open it in your browser to see which sensor readings shifted.
+
+---
+
+## Explore the prediction API
+
+Want to query the API directly? Run these from any terminal while the system is up.
+
+Check the API is healthy and which model version is loaded:
+
+```bash
+curl http://localhost:8000/health
+```
+
+You should see something like: `{"status": "ok", "model_loaded": true}`
+
+Send a single prediction request:
+
+```bash
+curl -X POST http://localhost:8000/predict \
+  -H "Content-Type: application/json" \
+  -d '{"Type": "M", "Air temperature [K]": 298.1, "Process temperature [K]": 308.6, "Rotational speed [rpm]": 1551, "Torque [Nm]": 42.8, "Tool wear [min]": 0}'
+```
 
 ---
 
