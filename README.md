@@ -19,6 +19,8 @@ This system predicts industrial equipment failures before they happen — using 
 
 One thing: **Docker Desktop.**
 
+Docker packages everything this project needs — the ML model, Python, all libraries — into a self-contained box that runs identically on any machine. You do not need to install Python or configure anything; Docker handles it all.
+
 - [Download Docker Desktop for Mac](https://www.docker.com/products/docker-desktop/)
 - [Download Docker Desktop for Windows](https://www.docker.com/products/docker-desktop/)
 
@@ -35,7 +37,7 @@ Open a terminal and run these three commands in order:
 git clone https://github.com/Preempt-Analytics-Demo/predictive-maintenance-demo.git
 cd predictive-maintenance-demo
 
-# 2. Start the prediction API and the drift monitor
+# 2. Start the prediction API and the drift monitor (runs silently in the background)
 docker compose up -d
 
 # 3. Smoke test — verify the simulation engine is talking to the prediction API
@@ -43,7 +45,7 @@ docker compose run --rm simulator --mode normal --n-readings 500
 ```
 
 **What just happened:**
-- Step 2 started two background services: the prediction API (port 8000) and the drift monitor
+- Step 2 started two background services in detached mode — they keep running after you close your terminal. To confirm both are up: `docker compose ps`
 - Step 3 confirmed they are connected — 500 sensor readings were routed through the API, predictions were made, and results were stored
 
 If you saw a stream of readings ending with `Done — 500 readings stored`, the system is working correctly.
@@ -52,7 +54,7 @@ If you saw a stream of readings ending with `Done — 500 readings stored`, the 
 
 ## You're set up — now see the ML pipeline in action
 
-Steps 1–3 confirmed the system is running and the simulation engine is connected to the prediction API. Now let's put it through its paces: trigger the full retraining loop and watch the model update itself.
+Steps 1–3 confirmed the system is running and the simulation engine is connected to the prediction API. Next: trigger the full retraining loop and watch the model detect data shift, push new training data to the cloud, and retrain itself.
 
 ---
 
@@ -64,7 +66,7 @@ The system can detect when the data starts behaving differently (called *drift*)
 docker compose run --rm simulator --mode sudden-spike --n-readings 1000
 ```
 
-Then watch the monitor logs — it checks for drift every 5 minutes:
+Then watch the monitor logs in real time — it checks for drift every ~1 minute in demo mode (press `Ctrl+C` to stop watching):
 
 ```bash
 docker compose logs -f monitor
@@ -95,6 +97,8 @@ curl -X POST http://localhost:8000/predict \
   -H "Content-Type: application/json" \
   -d '{"Type": "M", "Air temperature [K]": 298.1, "Process temperature [K]": 308.6, "Rotational speed [rpm]": 1551, "Torque [Nm]": 42.8, "Tool wear [min]": 0}'
 ```
+
+You should see something like: `{"prediction": "normal", "probability": 0.03}`
 
 ---
 
@@ -128,7 +132,7 @@ POST /predict  ──►  API container (port 8000)  ──►  ML model (@produ
                                                             │
                                                      simulation.db
                                                             │
-                                              Monitor checks every 5 min
+                                              Monitor checks every ~1 min (demo)
                                                             │
                                               Drift detected?
                                                ├── No  → wait
@@ -147,7 +151,7 @@ POST /predict  ──►  API container (port 8000)  ──►  ML model (@produ
 
 | Name | GitHub |
 | ---- | ------ |
-| Nate | @x     |
-| Ivo  | @y     |
+| Nate | [@nate](https://github.com/nate) |
+| Ivo  | [@envelopingCODE](https://github.com/envelopingCODE) |
 
 neuefische AI Engineering Bootcamp · Cohort 2026
