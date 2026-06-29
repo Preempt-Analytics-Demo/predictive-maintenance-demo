@@ -825,8 +825,23 @@ def main(
         if result.returncode > 1:
             sys.exit(result.returncode)
     else:
-        print("Next: run drift detection to check for feature distribution shift.")
-        print("  python scripts/detect_drift.py")
+        # ── Post-run prompt ───────────────────────────────────────────────────
+        # When running inside Docker, the monitor service already calls detect_drift.py
+        # on a 1-minute schedule — pointing the user at a raw Python command would be
+        # confusing and redundant. Outside Docker (local dev), the Python command is
+        # still the right path because there is no background monitor process.
+        in_docker = Path("/.dockerenv").exists()   # Docker creates this file on every container
+        if in_docker:
+            print(
+                "\nRunning in demo mode — the monitor service will trigger drift detection"
+                "\nautomatically within ~1 minute."
+                "\n"
+                "\nTo trigger it manually right now:"
+                "\n  docker compose run --rm simulator --detect-drift"
+            )
+        else:
+            print("\nNext: run drift detection to check for feature distribution shift.")
+            print("  python scripts/detect_drift.py")
 
 
 if __name__ == "__main__":
