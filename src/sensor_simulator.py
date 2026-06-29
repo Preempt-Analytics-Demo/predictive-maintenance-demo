@@ -93,6 +93,7 @@ Prerequisites
   2. No .env changes needed — the simulator no longer talks to MLflow directly.
 """
 
+import os
 import random
 import sqlite3
 import subprocess
@@ -830,7 +831,9 @@ def main(
         # on a 1-minute schedule — pointing the user at a raw Python command would be
         # confusing and redundant. Outside Docker (local dev), the Python command is
         # still the right path because there is no background monitor process.
-        in_docker = Path("/.dockerenv").exists()   # Docker creates this file on every container
+        # PREEMPT_IN_DOCKER is set explicitly in docker-compose.yml — more reliable
+        # than probing /.dockerenv, which is undocumented and absent on some runtimes.
+        in_docker = os.environ.get("PREEMPT_IN_DOCKER") == "1"
         if in_docker:
             print(
                 "\nRunning in demo mode — the monitor service will trigger drift detection"

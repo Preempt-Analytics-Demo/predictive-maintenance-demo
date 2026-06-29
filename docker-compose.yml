@@ -30,7 +30,7 @@ services:
   # The FastAPI serving layer. Loads the @production model at startup and
   # answers POST /predict requests. This is the service external callers use.
   api:
-    image: ghcr.io/preempt-analytics/predictive-maintenance-capstone:latest
+    image: ghcr.io/preempt-analytics-demo/predictive-maintenance-demo:latest
     container_name: preempt-api
     ports:
       # "host_port:container_port" — maps port 8000 on your machine to port 8000
@@ -80,7 +80,7 @@ services:
   # simulation data and triggers the retraining pipeline via GitHub Actions.
   # Uses the same image as the API but overrides CMD with its own command.
   monitor:
-    image: ghcr.io/preempt-analytics/predictive-maintenance-capstone:latest
+    image: ghcr.io/preempt-analytics-demo/predictive-maintenance-demo:latest
     container_name: preempt-monitor
     command: ["python", "scripts/monitor.py"]  # overrides the CMD in Dockerfile
 
@@ -138,7 +138,7 @@ services:
   # --rm removes the container automatically after it exits (keeps things tidy).
   # Arguments after the service name are passed directly to sensor_simulator.py.
   simulator:
-    image: ghcr.io/preempt-analytics/predictive-maintenance-capstone:latest
+    image: ghcr.io/preempt-analytics-demo/predictive-maintenance-demo:latest
     container_name: preempt-simulator
     # The entrypoint is the fixed part of the command — sensor_simulator.py with
     # the API URL pre-configured. Arguments passed via `docker compose run` are
@@ -152,6 +152,12 @@ services:
 
     env_file:
       - .env.demo
+
+    environment:
+      # Explicit signal that this process is running inside Docker.
+      # More reliable than probing /.dockerenv, which is an undocumented
+      # implementation detail not guaranteed across all Docker runtimes.
+      PREEMPT_IN_DOCKER: "1"
 
     volumes:
       - ./data:/app/data  # simulation.db is written here by the simulator
