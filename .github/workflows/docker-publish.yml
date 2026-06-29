@@ -50,6 +50,13 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      # ── Set up QEMU ─────────────────────────────────────────────────────────
+      # QEMU lets the amd64 GitHub Actions runner emulate other CPU architectures.
+      # Without this, the runner can only build amd64 images and Apple Silicon
+      # Macs (arm64) get a platform mismatch warning and run via slow emulation.
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
       # ── Set up Buildx ───────────────────────────────────────────────────────
       # The default runner uses the plain "docker" buildx driver, which does
       # not support cache export backends (type=gha, type=registry, etc.).
@@ -89,6 +96,7 @@ jobs:
         with:
           context: .
           push: true
+          platforms: linux/amd64,linux/arm64   # native on both Intel/AMD and Apple Silicon
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha       # restore cache from previous runs
