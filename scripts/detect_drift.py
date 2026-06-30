@@ -104,7 +104,7 @@ REPORT_DIR    = _ROOT / "reports"                         # where the HTML repor
 # than a false alarm in a safety-critical context (unplanned downtime, failed components),
 # so we err on the side of sensitivity without triggering on a single noisy feature.
 # Override at runtime with --threshold without editing this file.
-DRIFT_THRESHOLD = 0.33
+DRIFT_THRESHOLD = 0.2
 
 # Evidently's statistical tests (KS, Wasserstein) plateau in accuracy at around
 # 5,000–10,000 rows — loading more does not improve detection quality but slows
