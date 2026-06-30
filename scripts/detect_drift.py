@@ -436,9 +436,18 @@ Examples:
             # Drift confirmed: export CSV and update retrain.trigger in the same commit.
             # --retrain writes a timestamp to retrain.trigger, which GitHub Actions watches.
             print(f"  --export-on-drift set: exporting data and triggering retrain workflow...")
-            subprocess.run(
-                [sys.executable, str(export_script), "--push", "--retrain"], check=True
+            # No check=True here: a failed export (e.g. no internet) would otherwise
+            # raise an unhandled CalledProcessError and dump a raw Python traceback —
+            # the same crash class as the empty-current-data bug fixed above. The
+            # export script already prints its own plain-English diagnosis; we just
+            # need to stop without a stack trace if it exits non-zero.
+            export_result = subprocess.run(
+                [sys.executable, str(export_script), "--push", "--retrain"]
             )
+            if export_result.returncode != 0:
+                print("\n  ERROR: Export/push failed - see the detail printed above.")
+                print(f"  Retry manually once the issue is fixed: python {export_script} --push --retrain")
+                sys.exit(1)
         else:
             print(f"  Next steps:")
             print(f"    1. Open the HTML report and check which features changed.")
@@ -451,9 +460,13 @@ Examples:
             # No drift: export CSV to keep the training dataset growing, but do NOT update
             # retrain.trigger — the workflow stays silent because there is nothing to learn.
             print(f"  --export-on-drift set: exporting data for accumulation (no retrain trigger)...")
-            subprocess.run(
-                [sys.executable, str(export_script), "--push"], check=True   # no --retrain
+            export_result = subprocess.run(
+                [sys.executable, str(export_script), "--push"]   # no --retrain
             )
+            if export_result.returncode != 0:
+                print("\n  ERROR: Export/push failed - see the detail printed above.")
+                print(f"  Retry manually once the issue is fixed: python {export_script} --push")
+                sys.exit(1)
 
     if too_few:
         print(
