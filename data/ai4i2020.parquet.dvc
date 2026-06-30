@@ -1,5 +1,5 @@
 outs:
-- md5: ab4865b10e7af98a1a7dc7e5e6418f7e
-  size: 710226
+- md5: 641528ffc0c155bd15ad1df3e4d186c2
+  size: 89818
   hash: md5
   path: ai4i2020.parquet
