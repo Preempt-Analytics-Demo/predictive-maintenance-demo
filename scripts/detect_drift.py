@@ -190,6 +190,7 @@ def run_drift_report(
     reference: pd.DataFrame,
     current: pd.DataFrame,
     report_path: pathlib.Path,
+    drift_share: float = DRIFT_THRESHOLD,
 ) -> dict:
     """Build the Evidently Report, run it, save HTML, return the results dict.
 
@@ -209,6 +210,15 @@ def run_drift_report(
 
     We use the "share" value to compare against DRIFT_THRESHOLD in main().
 
+    WHY drift_share IS PASSED EXPLICITLY
+    ─────────────────────────────────────
+    DataDriftPreset and DriftedColumnsCount both default drift_share to 0.5
+    when not given. That default drives the HTML report's own "Dataset Drift"
+    headline panel ("threshold is 0.5") completely independently of the
+    DRIFT_THRESHOLD this script actually verdicts on — so the report and the
+    console output used to disagree. Passing our threshold through makes the
+    HTML panel match the printed verdict.
+
     SNAPSHOT vs REPORT (Evidently 0.7.x)
     ─────────────────────────────────────
     In this version, report.run() RETURNS a Snapshot object instead of
@@ -218,9 +228,9 @@ def run_drift_report(
       snapshot.json()       → same but as a JSON string
     """
     report = Report(metrics=[
-        DataDriftPreset(),       # per-column drift tests → drives the HTML histograms
-        DataSummaryPreset(),     # data-quality checks and column-level stats
-        DriftedColumnsCount(),   # aggregate: N drifted / M total → drives the verdict
+        DataDriftPreset(drift_share=drift_share),     # per-column drift tests → drives the HTML histograms
+        DataSummaryPreset(),                          # data-quality checks and column-level stats
+        DriftedColumnsCount(drift_share=drift_share),  # aggregate: N drifted / M total → drives the verdict
     ])
 
     # report.run() executes all the statistical tests and returns a Snapshot.
@@ -415,7 +425,7 @@ Examples:
 
     # ── Stage 2: Run Evidently ────────────────────────────────────────────────
     print(f"\n[3/4] Running Evidently...")
-    result = run_drift_report(reference, current, pathlib.Path(args.report))
+    result = run_drift_report(reference, current, pathlib.Path(args.report), drift_share=args.threshold)
     print(f"      HTML report saved -> {args.report}")
 
     # ── Stage 3: Print per-column table ───────────────────────────────────────
