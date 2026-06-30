@@ -105,6 +105,26 @@ Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
 **Scope:** one logical change = one commit. If two files change for the same reason,
 they belong in the same commit. If they change for different reasons, split them.
 
+### Standing Protocol — Runtime Dependency Check
+As the last step before committing any significant change, verify the runtime
+environment the code will actually execute in — not your local shell — has every
+binary and package the new code path needs. A `subprocess.run(["git", ...])` or
+`import some_package` added in this step is silent until the code runs somewhere
+that doesn't have it; the demo, CI, and a developer's host can all differ.
+
+Concretely:
+  1. New Python import → confirm the package is in `requirements.txt`.
+  2. New CLI call (`subprocess`, `os.system`, shelling out to `git`/`ssh`/`dvc`/etc.)
+     → confirm the binary is installed in the `Dockerfile` for every image that
+     runs this code path (check each `docker-compose.yml` service that uses it,
+     not just the one you're testing against).
+  3. If the dependency is missing, add it in the same commit as the code that
+     needs it — don't ship the call and the dependency separately.
+This check is cheap; a missing binary inside a container fails silently (no error
+until the code path actually runs) and can break an automated loop (e.g. drift →
+retrain) for a long time before anyone notices, since the failure happens deep in
+a background process rather than at the point the code was written.
+
 ### Meta-Law — Conflict Resolution
 Laws are ordered. When they conflict, state the conflict, justify the resolution,
 and resolve in hierarchy order.
