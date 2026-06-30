@@ -82,11 +82,14 @@ def _append_log(drift_detected: bool, retrain_triggered: bool) -> None:
 # subprocess rather than importing it — keeping the two scripts independent and
 # making it easy to test detect_drift.py on its own without the scheduler.
 
-def check_drift() -> None:
-    print("\n" + "—" * 60)
-    print("  Drift check starting...")
-    print("—" * 60)
+ACTIONS_URL = "https://github.com/Preempt-Analytics-Demo/predictive-maintenance-demo/actions"
 
+
+def check_drift() -> None:
+    now = datetime.now(timezone.utc).strftime("%H:%M:%S UTC")
+    print(f"\n{'─' * 60}")
+    print(f"  [{now}]  Drift check running...")
+    print(f"{'─' * 60}")
 
     # ── Step 1: Run drift detection ───────────────────────────────────────────
     # detect_drift.py exits with code 0 (no drift) or 1 (drift detected).
@@ -97,8 +100,9 @@ def check_drift() -> None:
     )
 
     if result.returncode == 0:
-        print("  No drift detected. Model distribution is stable.")
-        print("  Next check scheduled per configured interval.")
+        print("\n  ✓  STABLE — sensor distributions look normal.")
+        print("     No retraining needed. Next check in ~1 minute.")
+        print(f"\n  → Run more simulations or see README for next steps.")
         _append_log(drift_detected=False, retrain_triggered=False)   # record the PASS
         return
 
@@ -109,20 +113,30 @@ def check_drift() -> None:
     #   --retrain : writes a UTC timestamp to retrain.trigger and commits + pushes
     #
     # GitHub Actions watches retrain.trigger — a change there fires retrain.yml.
-    # All error handling, commit messaging, and the Actions URL are handled inside
-    # export_simulation_to_parquet.py's _push_to_remote() function.
-    print("  Drift detected. Exporting data and triggering retrain...")
+    print("\n  ✗  DRIFT DETECTED — uploading new data and triggering retraining...")
+    print("     This may take a minute. Please wait.\n")
     export_result = subprocess.run(
         ["python", "scripts/export_simulation_to_parquet.py", "--purge", "--push", "--retrain"],
         cwd=ROOT,
     )
 
     if export_result.returncode != 0:
-        print("  ERROR: Export/push failed. Will retry on next scheduled run.")
+        print("\n  ERROR: Upload/push failed. Will retry on the next check (in ~1 minute).")
+        print("  If this keeps failing, check README → 'Trigger the full retraining loop'.")
         _append_log(drift_detected=True, retrain_triggered=False)
         return
 
-    print("  Retrain triggered. GitHub Actions will pick this up shortly.")
+    print("\n" + "═" * 60)
+    print("  RETRAINING TRIGGERED SUCCESSFULLY")
+    print("═" * 60)
+    print()
+    print("  The model is now retraining in the cloud.")
+    print("  Watch it run live — open this link in your browser:")
+    print()
+    print(f"  {ACTIONS_URL}")
+    print()
+    print("  See README → 'Trigger the full retraining loop' for what to expect.")
+    print("═" * 60)
     _append_log(drift_detected=True, retrain_triggered=True)
 
 
@@ -147,9 +161,27 @@ schedule.every(1).minutes.do(check_drift)
 # how long until the next job is due, so we sleep precisely that long rather
 # than waking up every 60 seconds to find nothing to do.
 if __name__ == "__main__":
-    print("Preempt Analytics — Drift Monitor")
-    print(f"  Log file : {LOG_PATH}")
-    print("Scheduled checks configured. Running first check now...")
+    print()
+    print("═" * 60)
+    print("  PREEMPT ANALYTICS — DRIFT MONITOR")
+    print("═" * 60)
+    print()
+    print("  What this does:")
+    print("    Every minute, compares live sensor readings to the")
+    print("    baseline distribution the model was trained on.")
+    print("    When significant drift is detected, it automatically")
+    print("    exports the new data and triggers model retraining.")
+    print()
+    print("  To watch in real time:")
+    print("    docker compose logs -f monitor")
+    print()
+    print("  For a full walkthrough of what happens next:")
+    print("    See README → 'Trigger the full retraining loop'")
+    print()
+    print(f"  Log file: {LOG_PATH}")
+    print("═" * 60)
+    print()
+    print("  Running first check now...")
 
     # Run once immediately at startup so you can verify the pipeline works
     # without waiting for the first scheduled tick.
