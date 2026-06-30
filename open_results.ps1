@@ -22,12 +22,12 @@ if (Test-Path $Report) {
 # Waiting 90 s here means the new run will be visible (or just starting) when
 # the page opens, rather than appearing empty and confusing the user.
 Write-Host ""
-Write-Host "  GitHub Actions will open automatically in your browser once the"
-Write-Host "  retraining workflow has had time to appear. Opening in 90 seconds..."
-for ($i = 90; $i -ge 1; $i--) {
-    Write-Host -NoNewline "`r  Opening in $i seconds...  "
-    Start-Sleep 1
-}
-Write-Host "`r  Opening GitHub Actions: $Actions"
+Write-Host "  GitHub Actions will open automatically once the retraining workflow"
+Write-Host "  has had time to appear (the monitor needs up to ~90 s to fire)."
+Write-Host "  Opening in 90 seconds..."
+Start-Sleep 30; Write-Host "  Opening in 60 seconds..."
+Start-Sleep 30; Write-Host "  Opening in 30 seconds..."
+Start-Sleep 30
+Write-Host "  Opening GitHub Actions: $Actions"
 Start-Process $Actions
 Write-Host ""

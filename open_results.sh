@@ -28,12 +28,12 @@ fi
 # Waiting 90 s here means the new run will be visible (or just starting) when
 # the page opens, rather than appearing empty and confusing the user.
 echo ""
-echo "  GitHub Actions will open automatically in your browser once the"
-echo "  retraining workflow has had time to appear. Opening in 90 seconds..."
-for i in $(seq 90 -1 1); do
-    printf "\r  Opening in %d seconds...  " $i
-    sleep 1
-done
-printf "\r  Opening GitHub Actions: $ACTIONS\n"
+echo "  GitHub Actions will open automatically once the retraining workflow"
+echo "  has had time to appear (the monitor needs up to ~90 s to fire)."
+echo "  Opening in 90 seconds..."
+sleep 30 && echo "  Opening in 60 seconds..."
+sleep 30 && echo "  Opening in 30 seconds..."
+sleep 30
+echo "  Opening GitHub Actions: $ACTIONS"
 _open "$ACTIONS"
 echo ""
