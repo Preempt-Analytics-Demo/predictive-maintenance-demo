@@ -1,4 +1,4 @@
 [core]
     remote = origin
 ['remote "origin"']
-    url = https://dagshub.com/Preempt-Analytics-Demo/predictive-maintenance-demo.dvc
+    url = https://Preempt-Analytics-Demo:cb0abc6746aadc07c637310babbd8db8ffea6df2@dagshub.com/Preempt-Analytics-Demo/predictive-maintenance-demo.dvc

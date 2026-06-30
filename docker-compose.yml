@@ -120,6 +120,13 @@ services:
       # or key setup required on the demo user's machine.
       - ./.git:/app/.git
 
+      # ── DVC repo config for the retrain push ───────────────────────────────
+      # DVC needs .dvc/ to recognise this as a tracked repository. Without this
+      # mount `dvc add` fails with "not inside a DVC repository". Credentials
+      # for the DagsHub remote are embedded in .dvc/config so no extra setup
+      # is required on the demo user's machine.
+      - ./.dvc:/app/.dvc
+
     depends_on:
       api:
         condition: service_healthy  # wait for the API to be ready before starting
