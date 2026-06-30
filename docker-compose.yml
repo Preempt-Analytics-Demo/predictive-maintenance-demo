@@ -166,8 +166,14 @@ services:
       # implementation detail not guaranteed across all Docker runtimes.
       PREEMPT_IN_DOCKER: "1"
 
+    # The simulator calls detect_drift.py internally after generating readings,
+    # which saves an HTML report to /app/reports/drift_report.html. Without this
+    # mount that file only exists inside the throwaway --rm container — the host's
+    # reports/ directory (what open_results.ps1 opens) never gets the fresh report
+    # and silently keeps showing whatever the long-running monitor container wrote.
     volumes:
-      - ./data:/app/data  # simulation.db is written here by the simulator
+      - ./data:/app/data        # simulation.db is written here by the simulator
+      - ./reports:/app/reports  # drift_report.html so the host sees this run's report, not a stale one
 
     depends_on:
       api:
