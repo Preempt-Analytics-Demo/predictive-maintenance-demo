@@ -379,6 +379,20 @@ Examples:
     current = load_current_data(pathlib.Path(args.db), since=args.since)
     print(f"      Loaded {len(current):,} rows")
 
+    # Evidently's Report.run() rejects current_data outright when it has 0 rows
+    # (pandas treats a 0-row frame as "empty" regardless of column count) and
+    # raises an unhandled ValueError. 0 rows is the normal state on a fresh
+    # `docker compose up` — monitor.py runs this check immediately at startup,
+    # before any simulator has ever generated a reading. Bail out here with a
+    # friendly message instead of letting that crash surface as a stack trace.
+    if len(current) == 0:
+        print(
+            "\n  No simulation data yet — nothing to compare against the baseline."
+        )
+        print("  Run the simulator first, then drift checks will have data to work with:")
+        print("    docker compose run --rm simulator --mode normal --n-readings 500")
+        sys.exit(0)
+
     too_few = len(current) < 30
     if too_few:
         if sys.stdin.isatty():
