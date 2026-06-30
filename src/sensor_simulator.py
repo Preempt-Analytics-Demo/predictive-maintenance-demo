@@ -826,22 +826,30 @@ def main(
         if result.returncode > 1:
             sys.exit(result.returncode)
     else:
-        # ── Post-run prompt ───────────────────────────────────────────────────
-        # When running inside Docker, the monitor service already calls detect_drift.py
-        # on a 1-minute schedule — pointing the user at a raw Python command would be
-        # confusing and redundant. Outside Docker (local dev), the Python command is
-        # still the right path because there is no background monitor process.
-        # PREEMPT_IN_DOCKER is set explicitly in docker-compose.yml — more reliable
-        # than probing /.dockerenv, which is undocumented and absent on some runtimes.
+        # ── Post-run drift check ──────────────────────────────────────────────
+        # In Docker mode we always run drift detection inline so the user sees
+        # the result in the same terminal without opening a second window.
+        # We do NOT pass --export-on-drift here — the background monitor service
+        # owns that step and fires it on its own 1-minute schedule, preventing
+        # a double-trigger if both ran the export at the same time.
+        # Outside Docker (local dev) there is no background monitor, so we print
+        # the manual command instead.
         in_docker = os.environ.get("PREEMPT_IN_DOCKER") == "1"
         if in_docker:
-            print(
-                "\nRunning in demo mode — the monitor service will trigger drift detection"
-                "\nautomatically within ~1 minute."
-                "\n"
-                "\nTo trigger it manually right now:"
-                "\n  docker compose run --rm simulator --detect-drift"
-            )
+            detect_script = Path(__file__).parent.parent / "scripts" / "detect_drift.py"
+            print("\n" + "─" * 60)
+            print("  Checking for drift on the readings you just generated...")
+            print("─" * 60 + "\n")
+            result = subprocess.run([sys.executable, str(detect_script)])
+            # exit 1 means "drift detected", not "I crashed" — do not propagate it
+            if result.returncode > 1:
+                sys.exit(result.returncode)
+            if result.returncode == 1:   # drift detected — point user to Actions
+                print(
+                    "\n  The drift monitor will trigger retraining automatically"
+                    "\n  within ~1 minute. Watch the job run:"
+                    "\n  https://github.com/Preempt-Analytics-Demo/predictive-maintenance-demo/actions"
+                )
         else:
             print("\nNext: run drift detection to check for feature distribution shift.")
             print("  python scripts/detect_drift.py")
