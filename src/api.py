@@ -83,6 +83,16 @@ from feature_transformation import FEATURES, FAILURE_TYPE_CLASSES, engineer_feat
 
 load_dotenv()  # reads MLFLOW_TRACKING_URI and credentials from the .env file
 
+# ── MLflow network timeout (startup-hang guard) ────────────────────────────────
+# mlflow.sklearn.load_model() has no built-in call timeout of its own — it just
+# inherits whatever MLFLOW_HTTP_REQUEST_TIMEOUT is set to (mlflow's default is
+# 120s). The API's lifespan hook downloads two models from DagsHub *before*
+# uvicorn starts accepting connections, so a slow or stalled connection here
+# blocks the Docker healthcheck indefinitely — `docker compose run` then waits
+# forever with no error and no visible progress. setdefault() keeps any value
+# the user already set in .env.demo; we only tighten the implicit default.
+os.environ.setdefault("MLFLOW_HTTP_REQUEST_TIMEOUT", "30")   # fail fast instead of hanging the healthcheck
+
 
 # ── Model registry names (integration contract) ────────────────────────────────
 # These names are fixed contracts shared with modeling_pipeline.py and the MLflow
