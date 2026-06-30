@@ -8,5 +8,8 @@
 REPORT="reports/drift_report.html"
 ACTIONS="https://github.com/Preempt-Analytics-Demo/predictive-maintenance-demo/actions"
 
-[ -f "$REPORT" ] && open "$REPORT" || echo "No drift report yet at $REPORT"
-open "$ACTIONS"
+# open command differs by OS — macOS uses `open`, Linux uses `xdg-open`
+_open() { case "$(uname -s)" in Darwin) open "$1" ;; Linux) xdg-open "$1" 2>/dev/null || true ;; esac; }
+
+[ -f "$REPORT" ] && _open "$REPORT" || echo "No drift report yet at $REPORT"
+_open "$ACTIONS"

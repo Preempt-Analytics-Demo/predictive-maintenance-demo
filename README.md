@@ -60,21 +60,23 @@ Steps 1–3 confirmed the system is running and the simulation engine is connect
 
 ## Trigger the full retraining loop
 
-The system can detect when the data starts behaving differently (called *drift*) and retrain itself automatically. To see this in action, generate readings that deliberately look abnormal:
+The system can detect when the data starts behaving differently (called *drift*) and retrain itself automatically. To see this in action, run one of the following commands depending on your OS — it generates abnormal sensor readings, checks for drift right in this terminal, then opens the drift report and GitHub Actions page in your browser automatically:
 
+**Mac / Linux**
 ```bash
-docker compose run --rm simulator --mode sudden-spike --n-readings 1000
+docker compose run --rm simulator --mode sudden-spike --n-readings 1000 && ./open_results.sh
 ```
 
-Then watch the monitor logs in real time — it checks for drift every ~1 minute in demo mode (press `Ctrl+C` to stop watching):
-
-```bash
-docker compose logs -f monitor
+**Windows (PowerShell)**
+```powershell
+docker compose run --rm simulator --mode sudden-spike --n-readings 1000; .\open_results.ps1
 ```
 
-When drift is detected, the monitor pushes new training data to the cloud and fires a GitHub Actions workflow that retrains the model. You can watch the workflow run live in the **Actions** tab of this GitHub repository.
-
-A drift report is saved to `reports/drift_report.html` — open it in your browser to see which sensor readings shifted.
+**What happens:**
+1. 1,000 abnormal readings are generated and sent to the prediction API
+2. Drift detection runs immediately and prints a report in this terminal — you will see which sensor features shifted and whether the threshold was crossed
+3. The drift report opens in your browser (`reports/drift_report.html`)
+4. The GitHub Actions page opens — if drift was detected, a retraining workflow appears there within ~1 minute and runs automatically
 
 ---
 
