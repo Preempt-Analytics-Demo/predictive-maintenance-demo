@@ -42,6 +42,18 @@ FROM python:3.11-slim
 WORKDIR /app
 
 
+# ── System packages ───────────────────────────────────────────────────────────
+# python:3.11-slim has neither git nor an ssh client. The monitor service's
+# export_simulation_to_parquet.py shells out to `git add/commit/push` to fire
+# the retrain workflow, and pushes over SSH using a deploy key (see
+# docker-compose.yml's GIT_SSH_KEY_B64 comment) — both binaries are required or
+# every retrain attempt crashes with FileNotFoundError right after the dvc push
+# step succeeds. --no-install-recommends keeps the slim image small.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends git openssh-client \
+    && rm -rf /var/lib/apt/lists/*
+
+
 # ── Dependencies ──────────────────────────────────────────────────────────────
 # Copy requirements.txt first — before any source code — to exploit layer caching.
 # If requirements.txt has not changed, Docker reuses the cached pip install layer
