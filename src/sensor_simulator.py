@@ -320,12 +320,28 @@ def check_api_health(api_url: str) -> None:
 
     except httpx.ConnectError:
         # ConnectError means the server isn't running at all (connection refused).
+        # The fix differs by environment: a Docker user never runs uvicorn directly,
+        # so telling them to would send them down the wrong path entirely.
+        in_docker = os.environ.get("PREEMPT_IN_DOCKER") == "1"
         print(f"\nERROR: Cannot connect to the API at {api_url}.")
         print("  The API must be running before the simulator starts.")
-        print("  Start it with:  uvicorn src.api:app --reload")
+        if in_docker:
+            print("  Check it's up:  docker compose ps")
+            print("  See its logs :  docker compose logs api")
+        else:
+            print("  Start it with:  uvicorn src.api:app --reload")
+        sys.exit(1)
+    except httpx.TimeoutException:
+        # The API process exists but hasn't answered in 5s — most likely it's
+        # still loading the model from DagsHub (can take a minute on first run),
+        # not a permanent failure, so this gets different guidance than ConnectError.
+        print(f"\nERROR: The API at {api_url} did not respond in time.")
+        print("  It may still be starting up - loading the model can take a minute on first run.")
+        print("  Wait a moment and try again. To see what it's doing:  docker compose logs api")
         sys.exit(1)
     except Exception as exc:
-        print(f"\nERROR: API health check failed: {exc}")
+        print(f"\nERROR: Could not check the API's health.")
+        print(f"  Technical detail: {exc}")
         sys.exit(1)
 
     if not data.get("model_loaded"):
@@ -631,10 +647,13 @@ def run_simulation(
             except httpx.HTTPStatusError as exc:
                 print(f"  [reading {i+1}] WARNING: API error {exc.response.status_code} — skipping.")
                 continue
-            except httpx.ConnectError as exc:
+            except httpx.ConnectError:
                 # Transient connection hiccup (e.g. a momentary port/socket issue) —
                 # skip this one reading instead of crashing a run thousands deep.
-                print(f"  [reading {i+1}] WARNING: connection error ({exc}) — skipping.")
+                # The raw exception here is a multi-line urllib3 stack-trace-style
+                # string that tells a non-technical user nothing useful; the plain
+                # phrase says exactly as much as they need mid-run.
+                print(f"  [reading {i+1}] WARNING: lost connection to the API - skipping.")
                 continue
 
             # ── Detect binary vs multiclass from the response ───────────────────
