@@ -334,6 +334,59 @@ def convert_to_parquet_format(sim_df: pd.DataFrame, starting_udi: int) -> pd.Dat
     return pd.DataFrame(rows)
 
 
+# ── Friendly error translation ───────────────────────────────────────────────
+# dvc and git report failures as raw CLI stderr — DNS errors, auth rejections,
+# merge conflicts — which means nothing to the non-technical demo user this
+# script runs for inside the monitor container. This maps the handful of
+# failure signatures we actually see in this demo (no internet, expired demo
+# credentials, a stale local commit) to one plain-English line, printed above
+# the raw text so a developer debugging the same log still gets full detail.
+_FAILURE_SIGNATURES: list[tuple[tuple[str, ...], str]] = [
+    (
+        ("Name or service not known", "nodename nor servname",
+         "Temporary failure in name resolution", "getaddrinfo failed",
+         "Could not resolve host"),
+        "No internet connection - this machine could not reach the network at all. "
+        "Your data is safe locally; the next check will retry automatically.",
+    ),
+    (
+        ("Connection refused", "Connection timed out", "Max retries exceeded",
+         "Could not connect"),
+        "Could not reach DagsHub/GitHub - the network is up but the remote server "
+        "did not respond. The next check will retry automatically.",
+    ),
+    (
+        ("401", "403", "Authentication failed", "Permission denied (publickey)",
+         "could not read Username"),
+        "Login to DagsHub/GitHub failed - the demo credentials may have expired "
+        "or changed. Check .env.demo against the project's DagsHub settings.",
+    ),
+    (
+        ("rejected", "non-fast-forward", "Updates were rejected"),
+        "Someone (or something) else pushed changes to this repo first. "
+        "Pull the latest changes, then retry.",
+    ),
+    (
+        ("nothing to commit",),
+        "Nothing new to save - this export produced no changes since the last push.",
+    ),
+    (
+        ("No space left on device",),
+        "This computer is out of disk space.",
+    ),
+]
+
+
+def _diagnose_failure(output: str) -> str | None:
+    """Match dvc/git failure text against known signatures; return a plain-English
+    cause, or None when the failure doesn't match anything we've seen before
+    (the raw output is still shown in that case — nothing is hidden)."""
+    for signatures, message in _FAILURE_SIGNATURES:
+        if any(sig in output for sig in signatures):    # first matching signature wins
+            return message
+    return None
+
+
 # ── Retrain trigger ───────────────────────────────────────────────────────────
 # Runs the dvc/git sequence that tells GitHub Actions new data is ready.
 # Each command must succeed before the next one starts — subprocess.run with
@@ -380,8 +433,13 @@ def _push_to_remote(data_path: Path, n_rows: int, trigger_retrain: bool = False)
         click.echo(f"\n  → {label}...")
         result = subprocess.run(cmd, capture_output=True, text=True)   # capture for clean printing
         if result.returncode != 0:
-            click.echo(f"\nERROR: `{' '.join(cmd)}` failed:", err=True)
-            click.echo(result.stderr or result.stdout, err=True)
+            output    = result.stderr or result.stdout
+            diagnosis = _diagnose_failure(output)         # plain-English cause, or None if unrecognised
+            click.echo(f"\nERROR: `{' '.join(cmd)}` failed.", err=True)
+            if diagnosis:
+                click.echo(f"  {diagnosis}", err=True)     # lead with the plain-English line (Redish: front-load)
+            click.echo("\n  Technical detail:", err=True)
+            click.echo(f"  {output}", err=True)            # full detail always shown — nothing hidden
             sys.exit(1)
         if result.stdout.strip():
             click.echo(result.stdout.strip())
