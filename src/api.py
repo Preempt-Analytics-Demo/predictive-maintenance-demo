@@ -241,6 +241,28 @@ app_state: dict = {}
 # Everything before yield runs at startup; everything after yield runs at
 # shutdown. The server serves requests during the yield.
 
+# ── Friendly error translation ────────────────────────────────────────────────
+# The except block below catches every kind of model-load failure with one
+# generic handler, but "no internet", "expired demo credentials", and "no
+# @production alias set" are three completely different problems needing three
+# different fixes. Printing only the raw MLflow/network exception (a wall of
+# nested stack-trace text) sends a non-technical user down the wrong fix path —
+# this maps the failure to plain English first, raw detail stays available below.
+def _diagnose_model_load_error(exc: Exception) -> str:
+    text = str(exc)
+    if any(s in text for s in (
+        "Name or service not known", "nodename nor servname", "getaddrinfo failed",
+        "Temporary failure in name resolution", "Could not resolve host",
+        "Max retries exceeded", "Connection refused", "ConnectTimeout", "ReadTimeout",
+    )):
+        return "Could not reach the model registry (DagsHub) over the internet. Check your network connection and try again."
+    if any(s in text for s in ("401", "403", "UNAUTHENTICATED", "PERMISSION_DENIED", "authentication")):
+        return "Login to the model registry failed - the demo credentials may have expired."
+    if any(s in text for s in ("RESOURCE_DOES_NOT_EXIST", "alias", "not found")):
+        return "No model is tagged 'production' yet. Fix: open the MLflow UI -> Models -> set the @production alias."
+    return "Could not load the model for an unrecognised reason - see the technical detail below."
+
+
 def _load_one_model(uri: str, model_name: str, alias: str) -> tuple:
     """Download one @production model from MLflow and return (model, version, f1).
 
@@ -284,8 +306,8 @@ async def lifespan(app: FastAPI):           # FastAPI passes itself in; we don't
         app_state["binary_loaded"] = False
         app_state["binary_error"]  = str(exc)
         print(f"  WARNING: Could not load model from '{binary_uri}'.")
-        print(f"  Fix: open the MLflow UI, find your best run, set alias 'production'.")
-        print(f"  Original error: {exc}")
+        print(f"  {_diagnose_model_load_error(exc)}")
+        print(f"  Technical detail: {exc}")
 
     print(f"\n  Loading model: {multiclass_uri} ...")
     try:
@@ -299,7 +321,8 @@ async def lifespan(app: FastAPI):           # FastAPI passes itself in; we don't
         app_state["multiclass_loaded"] = False
         app_state["multiclass_error"]  = str(exc)
         print(f"  WARNING: Could not load multiclass model — failure_type will be null.")
-        print(f"  Original error: {exc}")
+        print(f"  {_diagnose_model_load_error(exc)}")
+        print(f"  Technical detail: {exc}")
 
     yield  # ← the server is now live and handling requests; everything below runs on shutdown
 
