@@ -134,9 +134,12 @@ Usage
   python scripts/export_simulation_to_parquet.py --purge --push
 """
 
+import base64
+import os
 import sqlite3
 import subprocess
 import sys
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -387,6 +390,46 @@ def _diagnose_failure(output: str) -> str | None:
     return None
 
 
+# ── SSH environment setup for Docker ─────────────────────────────────────────
+# When running inside Docker the git remote URL contains 'github-preempt' — an
+# SSH Host alias that exists only in the host's ~/.ssh/config, not inside the
+# container. Without this function git push fails with "Could not resolve
+# hostname github-preempt". The fix: decode the Ed25519 deploy key from
+# GIT_SSH_KEY_B64 (set in .env.demo) and write a temp SSH config that maps the
+# alias to github.com. Returns None on the host where ~/.ssh/config already works.
+
+def _make_ssh_env() -> dict[str, str] | None:
+    """Return a GIT_SSH_COMMAND env dict that resolves the github-preempt alias.
+
+    Reads GIT_SSH_KEY_B64 from the environment. If absent (running on the host),
+    returns None so the host's own SSH config handles authentication as normal.
+    """
+    key_b64 = os.environ.get("GIT_SSH_KEY_B64")
+    if not key_b64:
+        return None  # host environment — ~/.ssh/config already has the alias
+
+    # Decode the deploy key and write to a temp file; SSH refuses keys not 0600
+    key_bytes = base64.b64decode(key_b64)
+    key_file = tempfile.NamedTemporaryFile(mode="wb", suffix=".pem", delete=False)
+    key_file.write(key_bytes)
+    key_file.close()
+    os.chmod(key_file.name, 0o600)  # SSH client refuses keys readable by others
+
+    # Map the host alias to the real GitHub hostname so git push resolves correctly
+    ssh_config = tempfile.NamedTemporaryFile(mode="w", suffix=".ssh_config", delete=False)
+    ssh_config.write(
+        f"Host github-preempt\n"
+        f"    HostName github.com\n"           # alias maps to GitHub's real server
+        f"    User git\n"
+        f"    IdentityFile {key_file.name}\n"   # deploy key decoded from GIT_SSH_KEY_B64
+        f"    StrictHostKeyChecking no\n"       # no known_hosts DB inside the container
+        f"    UserKnownHostsFile /dev/null\n"   # suppress "unknown host" warnings
+    )
+    ssh_config.close()
+
+    return {"GIT_SSH_COMMAND": f"ssh -F {ssh_config.name}"}
+
+
 # ── Retrain trigger ───────────────────────────────────────────────────────────
 # Runs the dvc/git sequence that tells GitHub Actions new data is ready.
 # Each command must succeed before the next one starts — subprocess.run with
@@ -421,6 +464,13 @@ def _push_to_remote(data_path: Path, n_rows: int, trigger_retrain: bool = False)
         commit_msg = f"data: add {n_rows:,} simulated observations [no retrain]"
         git_add_targets = [str(dvc_pointer)]                     # retrain.trigger unchanged → no workflow
 
+    # ── SSH environment (Docker only) ────────────────────────────────────────
+    # On the host, git's SSH config already has the 'github-preempt' alias.
+    # Inside Docker that alias is missing — _make_ssh_env() injects a temp
+    # SSH config that maps it to github.com so git push resolves correctly.
+    git_env = _make_ssh_env()
+    run_env = {**os.environ, **git_env} if git_env else None  # None = inherit as-is
+
     steps = [
         (["dvc", "add",  str(data_path)],               "Updating .dvc pointer"),
         (["dvc", "push", str(data_path)],               "Uploading Parquet to DagsHub"),
@@ -431,7 +481,7 @@ def _push_to_remote(data_path: Path, n_rows: int, trigger_retrain: bool = False)
 
     for cmd, label in steps:
         click.echo(f"\n  → {label}...")
-        result = subprocess.run(cmd, capture_output=True, text=True)   # capture for clean printing
+        result = subprocess.run(cmd, capture_output=True, text=True, env=run_env)  # env resolves SSH alias
         if result.returncode != 0:
             output    = result.stderr or result.stdout
             diagnosis = _diagnose_failure(output)         # plain-English cause, or None if unrecognised
