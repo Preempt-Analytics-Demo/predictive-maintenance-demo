@@ -45,6 +45,7 @@ docker compose run --rm simulator --mode normal --n-readings 500
 ```
 
 **What just happened:**
+
 - Step 2 started two background services in detached mode — they keep running after you close your terminal. To confirm both are up: `docker compose ps`
 - Step 3 confirmed they are connected — 500 sensor readings were routed through the API, predictions were made, and results were stored
 
@@ -60,19 +61,22 @@ Steps 1–3 confirmed the system is running and the simulation engine is connect
 
 ## Trigger the full retraining loop
 
-The system can detect when the data starts behaving differently (called *drift*) and retrain itself automatically. To see this in action, run one of the following commands depending on your OS — it generates abnormal sensor readings, checks for drift right in this terminal, then opens the drift report and GitHub Actions page in your browser automatically:
+The system can detect when the data starts behaving differently (called _drift_) and retrain itself automatically. To see this in action, run one of the following commands depending on your OS — it generates abnormal sensor readings, checks for drift right in this terminal, then opens the drift report and GitHub Actions page in your browser automatically:
 
 **Mac / Linux**
+
 ```bash
 docker compose run --rm simulator --mode sudden-spike --n-readings 1000 && ./open_results.sh
 ```
 
 **Windows (PowerShell)**
+
 ```powershell
 docker compose run --rm simulator --mode sudden-spike --n-readings 1000; .\open_results.ps1
 ```
 
 **What happens:**
+
 1. 1,000 abnormal readings are generated and sent to the prediction API
 2. Drift detection runs immediately and prints a report in this terminal — you will see which sensor features shifted and whether the threshold was crossed
 3. The drift report opens in your browser (`reports/drift_report.html`)
@@ -106,11 +110,11 @@ You should see something like: `{"prediction": "normal", "probability": 0.03}`
 
 ## Simulation modes
 
-| Command | What it simulates |
-|---|---|
-| `--mode normal` | Stable conditions — ~3.4% failure rate |
+| Command                | What it simulates                                             |
+| ---------------------- | ------------------------------------------------------------- |
+| `--mode normal`        | Stable conditions — ~3.4% failure rate                        |
 | `--mode gradual-drift` | Equipment slowly ageing — failure rate rises from 3.4% to 25% |
-| `--mode sudden-spike` | Abrupt failure spike — fastest way to trigger drift detection |
+| `--mode sudden-spike`  | Abrupt failure spike — fastest way to trigger drift detection |
 
 ---
 
@@ -151,9 +155,9 @@ POST /predict  ──►  API container (port 8000)  ──►  ML model (@produ
 
 ## Team
 
-| Name | GitHub |
-| ---- | ------ |
-| Nate | [@nate](https://github.com/nate) |
-| Ivo  | [@envelopingCODE](https://github.com/envelopingCODE) |
+| Name | GitHub                                               |
+| ---- | ---------------------------------------------------- |
+| Nate | [@envelopingCODE](https://github.com/envelopingCODE) |
+| Ivo  | [@undorigo](https://github.com/undorigo)             |
 
 neuefische AI Engineering Bootcamp · Cohort 2026

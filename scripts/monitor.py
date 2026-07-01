@@ -46,6 +46,7 @@
 
 
 import json                                    # serialise log entries as single-line JSON
+import sqlite3                                # check whether simulation.db has data before drift run
 import subprocess
 from datetime import datetime, timezone        # UTC timestamps for monitor_log.jsonl entries
 from pathlib import Path
@@ -57,7 +58,50 @@ import time
 # ROOT resolves to the project directory regardless of where the script is called from.
 # All subprocess calls use cwd=ROOT so relative paths inside those scripts work.
 ROOT = Path(__file__).resolve().parent.parent
-LOG_PATH = ROOT / "reports" / "monitor_log.jsonl"  # one JSON line appended per run; never overwritten
+LOG_PATH      = ROOT / "reports" / "monitor_log.jsonl"  # one JSON line appended per run; never overwritten
+SIMULATION_DB = ROOT / "data" / "simulation.db"         # checked before each drift run
+
+# ── Timing ────────────────────────────────────────────────────────────────────
+# How long to wait before the very first drift check at startup, and how often
+# to print the countdown line between checks. Both values are in seconds.
+# The startup grace period gives a new user time to read the banner (and start
+# the simulator) before the first check fires.
+STARTUP_DELAY_S     = 10   # seconds before the first drift check on a fresh start
+COUNTDOWN_INTERVAL_S = 15  # print "next check in Xs" every N seconds during idle
+
+
+# ── Pre-flight check ──────────────────────────────────────────────────────────
+# Before running Evidently's statistical tests, confirm there is at least one
+# row in simulation.db. detect_drift.py handles the empty case itself, but
+# calling it only to hear "no data" gives Frederick a confusing "STABLE" verdict
+# from the monitor's perspective. Checking here lets us print a clear, actionable
+# message and skip the full drift computation when the db is empty.
+
+def _db_has_data() -> bool:
+    """Return True if simulation.db has at least one sensor reading."""
+    if not SIMULATION_DB.exists():
+        return False
+    conn = sqlite3.connect(SIMULATION_DB)
+    count = conn.execute("SELECT COUNT(*) FROM sensor_readings").fetchone()[0]  # single-row aggregate
+    conn.close()
+    return count > 0
+
+
+# ── Countdown helper ──────────────────────────────────────────────────────────
+# Replaces the silent time.sleep() in the main loop. Prints one status line
+# per COUNTDOWN_INTERVAL_S so the terminal never looks frozen between checks.
+# Docker logs don't support carriage-return overwriting, so each tick is a new
+# line — matches the countdown style the simulator already uses when waiting to
+# open GitHub Actions.
+
+def _countdown_to_next_check(idle_seconds: float) -> None:
+    """Sleep idle_seconds while printing a periodic countdown line."""
+    remaining = max(int(idle_seconds), 1)
+    while remaining > 0:
+        print(f"  ┄  Next drift check in {remaining:3d}s …", flush=True)  # visible in docker logs -f
+        tick = min(COUNTDOWN_INTERVAL_S, remaining)   # don't sleep past the deadline
+        time.sleep(tick)
+        remaining -= tick
 
 
 # ── Run log ───────────────────────────────────────────────────────────────────
@@ -91,6 +135,20 @@ def check_drift() -> None:
     print(f"  [{now}]  Drift check running...")
     print(f"{'─' * 60}")
 
+    # ── Step 0: Guard — require at least one simulation row ───────────────────
+    # Running Evidently with an empty database produces a misleading "STABLE"
+    # verdict (exit 0 from detect_drift.py).  Checking here gives Frederick a
+    # plain "nothing to compare yet" message and skips the full computation.
+    if not _db_has_data():
+        print("\n  ○  No simulation data yet — the database is empty.")
+        print("     Run the simulator to generate readings, then this monitor")
+        print("     will compare them to the training baseline automatically:")
+        print()
+        print("     docker compose run --rm simulator \\")
+        print("       --mode normal --n-readings 500")
+        _append_log(drift_detected=False, retrain_triggered=False)
+        return
+
     # ── Step 1: Run drift detection ───────────────────────────────────────────
     # detect_drift.py exits with code 0 (no drift) or 1 (drift detected).
     # We read the exit code to decide whether to trigger the export.
@@ -101,8 +159,7 @@ def check_drift() -> None:
 
     if result.returncode == 0:
         print("\n  ✓  STABLE — sensor distributions look normal.")
-        print("     No retraining needed. Next check in ~1 minute.")
-        print(f"\n  → Run more simulations or see README for next steps.")
+        print("     No retraining needed.")
         _append_log(drift_detected=False, retrain_triggered=False)   # record the PASS
         return
 
@@ -161,33 +218,59 @@ schedule.every(1).minutes.do(check_drift)
 # how long until the next job is due, so we sleep precisely that long rather
 # than waking up every 60 seconds to find nothing to do.
 if __name__ == "__main__":
+    # ── Startup banner ────────────────────────────────────────────────────────
+    # This block prints once when the container starts. It is Frederick's first
+    # view of the monitor — the goal is to answer "what is this, what should I
+    # do next, and how will I know it worked?" before any drift check runs.
     print()
     print("═" * 60)
     print("  PREEMPT ANALYTICS — DRIFT MONITOR")
     print("═" * 60)
     print()
-    print("  What this does:")
-    print("    Every minute, compares live sensor readings to the")
-    print("    baseline distribution the model was trained on.")
-    print("    When significant drift is detected, it automatically")
-    print("    exports the new data and triggers model retraining.")
+    print("  What this does")
+    print("  ──────────────")
+    print("  Every minute this monitor compares the live sensor readings")
+    print("  in simulation.db to the distribution the model was trained")
+    print("  on.  When it detects significant drift (≥ 20 % of features"),
+    print("  shifted), it automatically exports the new data, pushes it")
+    print("  to DagsHub, and fires the GitHub Actions retraining workflow.")
     print()
-    print("  To watch in real time:")
+    print("  What YOU need to do")
+    print("  ───────────────────")
+    print("  1. Generate sensor readings (if you haven't yet):")
+    print("       docker compose run --rm simulator \\")
+    print("         --mode sudden-spike --n-readings 500")
+    print()
+    print("  2. That's it — this monitor handles everything else.")
+    print("     Watch the retraining workflow run live:")
+    print(f"     {ACTIONS_URL}")
+    print()
+    print("  To follow this monitor's output:")
     print("    docker compose logs -f monitor")
     print()
-    print("  For a full walkthrough of what happens next:")
-    print("    See README → 'Trigger the full retraining loop'")
-    print()
-    print(f"  Log file: {LOG_PATH}")
+    print(f"  Audit log: {LOG_PATH}")
     print("═" * 60)
-    print()
-    print("  Running first check now...")
 
-    # Run once immediately at startup so you can verify the pipeline works
-    # without waiting for the first scheduled tick.
+    # ── Startup grace period ──────────────────────────────────────────────────
+    # Give Frederick STARTUP_DELAY_S seconds to read the banner (and optionally
+    # start the simulator) before the first drift check fires.  A fresh container
+    # sometimes also needs a few seconds for DNS and the API healthcheck to
+    # settle — the delay acts as a natural buffer for both concerns.
+    print()
+    for remaining in range(STARTUP_DELAY_S, 0, -1):
+        print(f"\r  First drift check starting in {remaining:2d}s …", end="", flush=True)
+        time.sleep(1)
+    print()   # newline after countdown
+
+    # Run once immediately after the grace period so Frederick gets instant
+    # feedback without waiting for the first scheduled minute to tick.
     check_drift()
 
+    # ── Main scheduling loop ──────────────────────────────────────────────────
+    # schedule.run_pending() returns immediately; we sleep between ticks.
+    # _countdown_to_next_check() replaces the silent time.sleep() so the log
+    # always shows how long until the next check — the terminal never looks dead.
     while True:
-        schedule.run_pending()          # fire any jobs whose time has come
-        idle = schedule.idle_seconds()  # seconds until the next scheduled job
-        time.sleep(max(idle, 1))        # sleep exactly that long; floor at 1s to avoid busy-spin
+        schedule.run_pending()                        # fire any jobs whose time has come
+        idle = schedule.idle_seconds()                # seconds until the next scheduled job
+        _countdown_to_next_check(max(idle, 1))        # sleep with visible countdown
