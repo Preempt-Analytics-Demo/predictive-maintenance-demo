@@ -99,6 +99,12 @@ services:
       - ./data:/app/data     # simulation.db + baseline CSV
       - ./reports:/app/reports  # drift HTML reports
 
+      # ── Scripts mount ───────────────────────────────────────────────────────
+      # Overlay the image's baked-in scripts/ with the host copy. This means
+      # the monitor picks up script changes (e.g. bug fixes to export or SSH
+      # auth) immediately on container restart — no image rebuild required.
+      - ./scripts:/app/scripts
+
       # ── Git access for the retrain push ────────────────────────────────────
       # The Dockerfile excludes .git (see .dockerignore), so the container has
       # no git repo by default. The monitor needs git to commit retrain.trigger
