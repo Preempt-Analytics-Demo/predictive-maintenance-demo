@@ -426,7 +426,7 @@ Examples:
     # ── Stage 2: Run Evidently ────────────────────────────────────────────────
     print(f"\n[3/4] Running Evidently...")
     result = run_drift_report(reference, current, pathlib.Path(args.report), drift_share=args.threshold)
-    print(f"      HTML report saved -> {args.report}")
+    print(f"      HTML report saved -> reports/drift_report.html")  # open from project root, not container path
 
     # ── Stage 3: Print per-column table ───────────────────────────────────────
     print_per_column_results(result)
@@ -459,11 +459,9 @@ Examples:
                 print(f"  Retry manually once the issue is fixed: python {export_script} --push --retrain")
                 sys.exit(1)
         else:
-            print(f"  Next steps:")
-            print(f"    1. Open the HTML report and check which features changed.")
-            print(f"    2. Export and retrain:")
-            print(f"         Automated  : monitor.py handles this automatically — no action needed.")
-            print(f"         Manual run : docker compose exec monitor python scripts/export_simulation_to_parquet.py --push --retrain")
+            # Keep it to one line: the monitor will print its own follow-up,
+            # and a standalone caller just needs to know the one command to run.
+            print(f"  To export and retrain: python scripts/export_simulation_to_parquet.py --push --retrain")
     else:
         print(f"\n  PASS — distribution looks stable. No retraining triggered.")
         if args.export_on_drift:

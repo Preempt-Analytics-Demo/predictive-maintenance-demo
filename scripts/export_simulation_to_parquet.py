@@ -467,27 +467,32 @@ def _push_to_remote(data_path: Path, n_rows: int, trigger_retrain: bool = False)
     git_env = _make_ssh_env()
     run_env = {**os.environ, **git_env} if git_env else None  # None = inherit as-is
 
+    # Each step tuple: (command, label, echo_stdout).
+    # echo_stdout=False for dvc add: DVC prints "To track the changes with git,
+    # run: git add ..." even on success — advisory noise that contradicts what
+    # the next step is about to do automatically. Errors still surface via stderr
+    # on returncode != 0, so nothing is hidden when something actually goes wrong.
     steps = [
-        (["dvc", "add",  str(data_path)],               "Updating .dvc pointer"),
-        (["dvc", "push", str(data_path)],               "Uploading Parquet to DagsHub"),
-        (["git", "add"] + git_add_targets,              "Staging files"),
-        (["git", "commit", "-m", commit_msg],           "Committing"),
-        (["git", "push"],                               "Pushing to GitHub"),
+        (["dvc", "add",  str(data_path)],               "Updating .dvc pointer",         False),
+        (["dvc", "push", str(data_path)],               "Uploading Parquet to DagsHub",  True),
+        (["git", "add"] + git_add_targets,              "Staging files",                  False),
+        (["git", "commit", "-m", commit_msg],           "Committing",                     True),
+        (["git", "push"],                               "Pushing to GitHub",              True),
     ]
 
-    for cmd, label in steps:
+    for cmd, label, echo_stdout in steps:
         click.echo(f"\n  → {label}...")
         result = subprocess.run(cmd, capture_output=True, text=True, env=run_env)  # env resolves SSH alias
         if result.returncode != 0:
             output    = result.stderr or result.stdout
-            diagnosis = _diagnose_failure(output)         # plain-English cause, or None if unrecognised
+            diagnosis = _diagnose_failure(output)
             click.echo(f"\nERROR: `{' '.join(cmd)}` failed.", err=True)
             if diagnosis:
-                click.echo(f"  {diagnosis}", err=True)     # lead with the plain-English line (Redish: front-load)
+                click.echo(f"  {diagnosis}", err=True)
             click.echo("\n  Technical detail:", err=True)
-            click.echo(f"  {output}", err=True)            # full detail always shown — nothing hidden
+            click.echo(f"  {output}", err=True)
             sys.exit(1)
-        if result.stdout.strip():
+        if echo_stdout and result.stdout.strip():
             click.echo(result.stdout.strip())
 
     if trigger_retrain:
@@ -562,6 +567,13 @@ def _push_to_remote(data_path: Path, n_rows: int, trigger_retrain: bool = False)
         "is pushed (data accumulates) but no workflow runs."
     ),
 )
+@click.option(
+    "--verbose",
+    is_flag=True,
+    default=False,
+    help="Print full export summary (failure type counts, UDI range, first 3 rows). "
+         "Default is one summary line — enough for the monitor's automated flow.",
+)
 def main(
     output_path: str,
     db_path: str,
@@ -571,6 +583,7 @@ def main(
     purge: bool,
     push: bool,
     retrain: bool,
+    verbose: bool,
 ) -> None:
     """Convert simulation.db readings to the AI4I Parquet format for DVC retraining.
 
@@ -590,9 +603,7 @@ def main(
     db     = Path(db_path)
 
     # ── Load simulation rows ───────────────────────────────────────────────────
-    click.echo(f"\nLoading simulation data from {db} ...")
     sim_df = load_simulation_rows(db, since)
-    click.echo(f"  {len(sim_df):,} rows loaded from simulation.db")
 
     if sim_df.empty:
         click.echo("Nothing to export. Run sensor_simulator.py to generate readings.")
@@ -600,34 +611,41 @@ def main(
 
     # ── Determine starting UDI ─────────────────────────────────────────────────
     if append and output.exists():
-        existing = pd.read_parquet(output, columns=["UDI"])  # Parquet: load only the UDI column
-        last_udi = int(existing["UDI"].max())
-        click.echo(f"  Existing Parquet: {len(existing):,} rows, last UDI = {last_udi}")
+        existing     = pd.read_parquet(output, columns=["UDI"])  # Parquet: load only the UDI column
+        last_udi     = int(existing["UDI"].max())
         starting_udi = last_udi + 1
+        existing_count = len(existing)
     else:
-        starting_udi = 1
-        click.echo("  No existing Parquet found (or --no-append set). Starting UDI at 1.")
+        starting_udi   = 1
+        existing_count = 0
 
     # ── Convert ────────────────────────────────────────────────────────────────
     export_df = convert_to_parquet_format(sim_df, starting_udi)
 
     # ── Preview ────────────────────────────────────────────────────────────────
+    # Default: one concise line so the automated monitor flow stays readable.
+    # --verbose: full breakdown useful when debugging data quality issues.
     failure_rate = export_df["Machine failure"].mean()
-    hdf_count    = export_df["HDF"].sum()
-    pwf_count    = export_df["PWF"].sum()
-    osf_count    = export_df["OSF"].sum()
-    twf_count    = export_df["TWF"].sum()
-
-    click.echo(f"\nExport summary:")
-    click.echo(f"  Rows to export      : {len(export_df):,}")
-    click.echo(f"  Failure rate        : {failure_rate:.1%}")
-    click.echo(f"  HDF flags set       : {hdf_count:,}  ({hdf_count/len(export_df):.1%})")
-    click.echo(f"  PWF flags set       : {pwf_count:,}  ({pwf_count/len(export_df):.1%})")
-    click.echo(f"  OSF flags set       : {osf_count:,}  ({osf_count/len(export_df):.1%})")
-    click.echo(f"  TWF flags set       : {twf_count:,}  ({twf_count/len(export_df):.1%})")
-    click.echo(f"  UDI range           : {starting_udi} -> {starting_udi + len(export_df) - 1}")
-    click.echo(f"\nFirst 3 export rows:")
-    click.echo(export_df.head(3).to_string(index=False))
+    total_after  = existing_count + len(export_df)
+    click.echo(
+        f"\n  {len(export_df):,} rows ready for upload  "
+        f"(failure rate {failure_rate:.0%}, dataset will reach {total_after:,} rows)"
+    )
+    if verbose:
+        hdf_count = export_df["HDF"].sum()
+        pwf_count = export_df["PWF"].sum()
+        osf_count = export_df["OSF"].sum()
+        twf_count = export_df["TWF"].sum()
+        click.echo(f"\nExport summary:")
+        click.echo(f"  Rows to export      : {len(export_df):,}")
+        click.echo(f"  Failure rate        : {failure_rate:.1%}")
+        click.echo(f"  HDF flags set       : {hdf_count:,}  ({hdf_count/len(export_df):.1%})")
+        click.echo(f"  PWF flags set       : {pwf_count:,}  ({pwf_count/len(export_df):.1%})")
+        click.echo(f"  OSF flags set       : {osf_count:,}  ({osf_count/len(export_df):.1%})")
+        click.echo(f"  TWF flags set       : {twf_count:,}  ({twf_count/len(export_df):.1%})")
+        click.echo(f"  UDI range           : {starting_udi} -> {starting_udi + len(export_df) - 1}")
+        click.echo(f"\nFirst 3 export rows:")
+        click.echo(export_df.head(3).to_string(index=False))
 
     if dry_run:
         click.echo("\n[DRY RUN] No files written.")
@@ -640,12 +658,9 @@ def main(
         existing_full = pd.read_parquet(output)                       # load the full existing dataset
         combined      = pd.concat([existing_full, export_df], ignore_index=True)
         combined.to_parquet(output, index=False)                      # overwrite with combined rows
-        click.echo(f"\nAppended {len(export_df):,} rows → {output}")
-        click.echo(f"  Total rows in Parquet: {len(combined):,}")
     else:
         output.parent.mkdir(parents=True, exist_ok=True)
         export_df.to_parquet(output, index=False)                     # write first batch
-        click.echo(f"\nWrote {len(export_df):,} rows → {output}")
 
     # ── Push to remote and trigger retraining ─────────────────────────────────
     # Push runs BEFORE purge. _push_to_remote calls sys.exit(1) on any failure,

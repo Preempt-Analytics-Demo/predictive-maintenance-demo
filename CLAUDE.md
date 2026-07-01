@@ -125,6 +125,26 @@ until the code path actually runs) and can break an automated loop (e.g. drift �
 retrain) for a long time before anyone notices, since the failure happens deep in
 a background process rather than at the point the code was written.
 
+### Standing Protocol — Downstream Effects & Pre-Push Verification
+Before pushing any significant change, explicitly reason through what else could
+break. "Significant" means: touching a shared contract, changing output format that
+other scripts parse, modifying CLI flags a caller depends on, or removing output
+a user or test might rely on. The cost of a missed side-effect is always higher
+than the cost of stopping to check.
+
+Concretely:
+  1. Name every file, script, and workflow that consumes what you just changed —
+     not just the file you edited.
+  2. For output format changes (stdout text, JSON keys, exit codes), confirm that
+     all callers tolerate the new format. Callers include subprocesses, tests, CI
+     steps that grep for strings, and human users reading the terminal.
+  3. Run a smoke test against the real execution environment (not just a unit test)
+     before pushing. For this project: `--dry-run` on the export script, and
+     `docker compose logs monitor` after restarting to confirm the new output looks
+     correct in context.
+  4. If the change cannot be tested without live credentials or a running container,
+     state that explicitly and describe what you would verify if you could.
+
 ### Meta-Law — Conflict Resolution
 Laws are ordered. When they conflict, state the conflict, justify the resolution,
 and resolve in hierarchy order.

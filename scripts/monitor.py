@@ -152,6 +152,7 @@ def check_drift() -> None:
     # ── Step 1: Run drift detection ───────────────────────────────────────────
     # detect_drift.py exits with code 0 (no drift) or 1 (drift detected).
     # We read the exit code to decide whether to trigger the export.
+    print("\n  ◆  PHASE 1/2 — Analysing sensor distributions…")
     result = subprocess.run(
         ["python", "scripts/detect_drift.py"],
         cwd=ROOT,
@@ -170,7 +171,7 @@ def check_drift() -> None:
     #   --retrain : writes a UTC timestamp to retrain.trigger and commits + pushes
     #
     # GitHub Actions watches retrain.trigger — a change there fires retrain.yml.
-    print("\n  ✗  DRIFT DETECTED — uploading new data and triggering retraining...")
+    print("\n  ◆  PHASE 2/2 — Uploading data and triggering retraining…")
     print("     This may take a minute. Please wait.\n")
     export_result = subprocess.run(
         ["python", "scripts/export_simulation_to_parquet.py", "--purge", "--push", "--retrain"],
@@ -250,7 +251,7 @@ if __name__ == "__main__":
     print("  To follow this monitor's output:")
     print("    docker compose logs -f monitor")
     print()
-    print(f"  Audit log: {LOG_PATH}")
+    print(f"  Audit log: reports/monitor_log.jsonl")   # host path: <project-root>/reports/
     print("═" * 60)
 
     # ── Startup grace period ──────────────────────────────────────────────────
