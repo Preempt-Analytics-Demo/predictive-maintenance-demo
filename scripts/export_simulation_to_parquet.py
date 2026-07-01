@@ -391,22 +391,21 @@ def _diagnose_failure(output: str) -> str | None:
 
 
 # ── SSH environment setup for Docker ─────────────────────────────────────────
-# When running inside Docker the git remote URL contains 'github-preempt' — an
-# SSH Host alias that exists only in the host's ~/.ssh/config, not inside the
-# container. Without this function git push fails with "Could not resolve
-# hostname github-preempt". The fix: decode the Ed25519 deploy key from
-# GIT_SSH_KEY_B64 (set in .env.demo) and write a temp SSH config that maps the
-# alias to github.com. Returns None on the host where ~/.ssh/config already works.
+# Inside Docker there is no SSH agent and no ~/.ssh/config with GitHub keys.
+# This function decodes the Ed25519 deploy key from GIT_SSH_KEY_B64 (set in
+# .env.demo) and injects it via GIT_SSH_COMMAND so git push authenticates
+# regardless of which hostname the origin remote points to. Returns None on the
+# host where ~/.ssh/config already handles authentication normally.
 
 def _make_ssh_env() -> dict[str, str] | None:
-    """Return a GIT_SSH_COMMAND env dict that resolves the github-preempt alias.
+    """Return a GIT_SSH_COMMAND env dict that authenticates git with the deploy key.
 
     Reads GIT_SSH_KEY_B64 from the environment. If absent (running on the host),
     returns None so the host's own SSH config handles authentication as normal.
     """
     key_b64 = os.environ.get("GIT_SSH_KEY_B64")
     if not key_b64:
-        return None  # host environment — ~/.ssh/config already has the alias
+        return None  # host environment — ~/.ssh/config handles authentication
 
     # Decode the deploy key and write to a temp file; SSH refuses keys not 0600
     key_bytes = base64.b64decode(key_b64)
@@ -415,19 +414,16 @@ def _make_ssh_env() -> dict[str, str] | None:
     key_file.close()
     os.chmod(key_file.name, 0o600)  # SSH client refuses keys readable by others
 
-    # Map the host alias to the real GitHub hostname so git push resolves correctly
-    ssh_config = tempfile.NamedTemporaryFile(mode="w", suffix=".ssh_config", delete=False)
-    ssh_config.write(
-        f"Host github-preempt\n"
-        f"    HostName github.com\n"           # alias maps to GitHub's real server
-        f"    User git\n"
-        f"    IdentityFile {key_file.name}\n"   # deploy key decoded from GIT_SSH_KEY_B64
-        f"    StrictHostKeyChecking no\n"       # no known_hosts DB inside the container
-        f"    UserKnownHostsFile /dev/null\n"   # suppress "unknown host" warnings
-    )
-    ssh_config.close()
-
-    return {"GIT_SSH_COMMAND": f"ssh -F {ssh_config.name}"}
+    # Inject the key directly via -i so it applies to any SSH hostname.
+    # Using -i avoids the need for a Host alias in ~/.ssh/config — the deploy
+    # key works whether origin is git@github.com or any alias pointing there.
+    return {
+        "GIT_SSH_COMMAND": (
+            f"ssh -i {key_file.name}"
+            f" -o StrictHostKeyChecking=no"   # no known_hosts DB inside the container
+            f" -o UserKnownHostsFile=/dev/null"  # suppress "unknown host" warnings
+        )
+    }
 
 
 # ── Retrain trigger ───────────────────────────────────────────────────────────
