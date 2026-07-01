@@ -209,7 +209,9 @@ def check_drift() -> None:
 # schedule.every().day.at("02:00").do(check_drift)
 #
 # Demo (comment out when deploying):
-schedule.every(1).minutes.do(check_drift)
+# 30s keeps the worst-case wait under a minute; GitHub Actions startup (~60-90s)
+# is the dominant delay regardless, so going shorter adds no real benefit.
+schedule.every(30).seconds.do(check_drift)
 
 
 # ── Main loop ─────────────────────────────────────────────────────────────────
