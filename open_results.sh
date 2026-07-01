@@ -11,15 +11,23 @@ ACTIONS="https://github.com/Preempt-Analytics-Demo/predictive-maintenance-demo/a
 # open command differs by OS — macOS uses `open`, Linux uses `xdg-open`
 _open() { case "$(uname -s)" in Darwin) open "$1" ;; Linux) xdg-open "$1" 2>/dev/null || true ;; esac; }
 
-# ── Open the drift report immediately ────────────────────────────────────────
+# ── Open the drift report after a short delay ────────────────────────────────
 # The HTML report is already written to the mounted reports/ volume — it is
-# ready the moment the simulator container exits.
+# ready the moment the simulator container exits. An 8-second pause gives you
+# time to read the per-feature drift table in this terminal before the browser
+# jumps to the foreground and steals focus from this window.
+echo ""
+echo "  The HTML report shows per-feature drift histograms and the overall verdict."
+echo "  Opening in your browser in 8 seconds..."
+sleep 2 && echo "  Opening in 6 seconds..."
+sleep 2 && echo "  Opening in 4 seconds..."
+sleep 2 && echo "  Opening in 2 seconds..."
+sleep 2
 if [ -f "$REPORT" ]; then
-    echo ""
-    echo "  Opening drift report in your browser: $REPORT"
-    _open "$REPORT"
+    echo "  Opening drift report: $REPORT"
+    _open "$REPORT"                         # macOS: open, Linux: xdg-open
 else
-    echo "  No drift report yet at $REPORT — run the simulator first."
+    echo "  No drift report found at $REPORT — run the simulator first."
 fi
 
 # ── Open GitHub Actions after a delay ────────────────────────────────────────

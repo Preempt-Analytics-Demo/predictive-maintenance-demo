@@ -7,13 +7,22 @@
 $Report  = "reports\drift_report.html"
 $Actions = "https://github.com/Preempt-Analytics-Demo/predictive-maintenance-demo/actions"
 
-# -- Open the drift report immediately ----------------------------------------
+# -- Open the drift report after a short delay --------------------------------
+# The HTML report is written the moment the simulator exits — it is ready now.
+# An 8-second pause gives you time to read the terminal output (which shows the
+# per-feature drift table) before the browser takes focus away from this window.
+Write-Host ""
+Write-Host "  The HTML report shows per-feature drift histograms and the overall verdict."
+Write-Host "  Opening in your browser in 8 seconds..."
+Start-Sleep 2; Write-Host "  Opening in 6 seconds..."
+Start-Sleep 2; Write-Host "  Opening in 4 seconds..."
+Start-Sleep 2; Write-Host "  Opening in 2 seconds..."
+Start-Sleep 2
 if (Test-Path $Report) {
-    Write-Host ""
-    Write-Host "  Opening drift report in your browser: $Report"
-    Start-Process (Resolve-Path $Report)
+    Write-Host "  Opening drift report: $Report"
+    Start-Process (Resolve-Path $Report)   # opens in default browser on Windows
 } else {
-    Write-Host "  No drift report yet at $Report - run the simulator first."
+    Write-Host "  No drift report found at $Report — run the simulator first."
 }
 
 # -- Open GitHub Actions after a delay -----------------------------------------
