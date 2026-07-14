@@ -379,6 +379,8 @@ Examples:
     # No prior HTML report on disk means drift detection has never completed
     # here before — the README's one-time smoke test, not a routine check.
     # Stage 3 below writes this same path, so this only reads True once.
+    # To deliberately re-arm the pause (e.g. to test it): delete the report,
+    # `rm reports/drift_report.html` — there is no --reset flag for this script.
     is_first_run = not pathlib.Path(args.report).exists()
 
     # ── First-run primer ─────────────────────────────────────────────────────

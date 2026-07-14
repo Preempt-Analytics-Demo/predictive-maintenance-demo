@@ -792,12 +792,6 @@ def main(
 
     conn = init_db(DB_PATH)
 
-    # ── First-run detection ──────────────────────────────────────────────────
-    # Checked BEFORE --reset can delete anything, so a returning user who resets
-    # and reruns is still recognised as "not first run" — the pause below is
-    # for the README's one-time smoke test, not every clean-slate rerun.
-    is_first_run = conn.execute("SELECT COUNT(*) FROM sensor_readings").fetchone()[0] == 0
-
     if reset:
         # DELETE removes all rows but keeps the table and file intact.
         # This is equivalent to rm simulation.db followed by a fresh init,
@@ -805,6 +799,12 @@ def main(
         deleted = conn.execute("DELETE FROM sensor_readings").rowcount
         conn.commit()
         print(f"  Database reset — {deleted} existing row(s) deleted.")
+
+    # ── First-run detection ──────────────────────────────────────────────────
+    # Checked AFTER --reset so --reset doubles as a deliberate way to re-see the
+    # first-run primer pause — useful for testing it, or for a demo presenter
+    # who wants a clean "first impression" run without a brand-new clone.
+    is_first_run = conn.execute("SELECT COUNT(*) FROM sensor_readings").fetchone()[0] == 0
 
     # --n-readings 0 means "just reset, don't simulate" — no API needed.
     if n_readings == 0:
