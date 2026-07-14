@@ -809,6 +809,17 @@ def main(
     # This check is deferred until here so --reset can run without the API.
     check_api_health(api_url)
 
+    # ── First-run primer ─────────────────────────────────────────────────────
+    # What follows is hundreds of scrolling status lines — the single most
+    # disorienting moment for someone running this for the first time, since
+    # nothing before it explains what a "reading" is or why there are so many.
+    # One plain-language sentence up front answers "did I just break it?"
+    # before the wall of text can raise the question (Krug: don't make me think).
+    print("  What you're about to see: one line per simulated sensor reading —")
+    print("  a virtual machine sending live data to your API, which predicts")
+    print("  failure risk in real time. This is expected output, not an error;")
+    print("  let it scroll, or skip ahead once it finishes.\n")
+
     print("  Database ready. Starting simulation...\n")
 
     try:
