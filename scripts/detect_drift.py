@@ -400,20 +400,22 @@ Examples:
     print("  retrains the model automatically. The detail below is technical —")
     print("  skip to the verdict at the bottom for the headline result.")
 
+    # ── Smoke-test pause ──────────────────────────────────────────────────────
+    # Sits right after the primer and before any status output, so the reader
+    # has actually seen the explanation before the technical report starts
+    # scrolling. Only fires on a genuinely first-ever run AND only when a human
+    # is at the keyboard (isatty()). The isatty() check is the real safety net:
+    # monitor.py calls this script every 30s as a background subprocess with no
+    # TTY, so this never blocks the automatic drift → retrain loop, even if
+    # first-run detection above is ever wrong.
+    if is_first_run and sys.stdin.isatty():
+        input("  Press Enter to continue...")
+        print()
+
     # ── Stage 1: Load data ────────────────────────────────────────────────────
     print()
     print("  Checking for drift on the readings you just generated...")
     print()
-
-    # ── Smoke-test pause ──────────────────────────────────────────────────────
-    # Only fires on a genuinely first-ever run AND only when a human is at the
-    # keyboard (isatty()). The isatty() check is the real safety net: monitor.py
-    # calls this script every 30s as a background subprocess with no TTY, so
-    # this never blocks the automatic drift → retrain loop, even if first-run
-    # detection above is ever wrong.
-    if is_first_run and sys.stdin.isatty():
-        input("  Press Enter to continue...")
-        print()
 
     print(f"\n[1/4] Reference data  : {args.csv}")
     reference = load_reference_data(pathlib.Path(args.csv))
