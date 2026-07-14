@@ -751,6 +751,14 @@ def run_simulation(
     help="Delete all existing rows from simulation.db before starting. Use this to begin a clean run.",
 )
 @click.option(
+    "--pause", is_flag=True, default=False,
+    help=(
+        "Show the Press-Enter primer pause even if simulation.db already has rows. "
+        "By default the pause only fires once, ever, on a genuinely empty database — "
+        "use this flag to force it again for a demo or walkthrough."
+    ),
+)
+@click.option(
     "--detect-drift", "detect_drift", is_flag=True, default=False,
     help=(
         "Run drift detection automatically after simulation completes. "
@@ -773,6 +781,7 @@ def main(
     interval: float,
     api_url: str,
     reset: bool,
+    pause: bool,
     detect_drift: bool,
     export_on_drift: bool,
 ) -> None:
@@ -832,12 +841,13 @@ def main(
     print("  deployment, actual machine sensors would take the simulator's place.\n")
 
     # ── Smoke-test pause ──────────────────────────────────────────────────────
-    # Only fires on a genuinely first-ever run (empty DB) AND only when a human
-    # is at the keyboard (isatty()). The isatty() check is the real safety net:
-    # docker compose run allocates no TTY for the monitor container's background
-    # subprocess calls, so this never blocks the automatic drift → retrain loop
-    # even if first-run detection above is ever wrong.
-    if is_first_run and sys.stdin.isatty():
+    # Fires on a genuinely first-ever run (empty DB) or when --pause forces it
+    # (e.g. for a demo, since simulation.db lives on a host-mounted volume and
+    # survives container restarts — is_first_run alone would stay False after
+    # the very first run, ever). Always still gated on isatty(): docker compose
+    # run allocates no TTY for the monitor container's background subprocess
+    # calls, so this never blocks the automatic drift → retrain loop.
+    if (is_first_run or pause) and sys.stdin.isatty():
         input("  Press Enter to continue...")
         print()
 
