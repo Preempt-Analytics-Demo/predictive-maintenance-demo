@@ -822,6 +822,8 @@ def main(
     # Naming the API from step 1 ties this step to the pipeline the reader
     # already built, not just to itself (Redish: connect to the greater whole)
     # before the wall of text can raise "did I just break it?" on its own.
+    print()
+    print("  ── Simulation primer ─────────────────────────────────────────────────────")
     print("  This step runs the Simulation Engine — built to mimic real sensor")
     print("  readings from a factory floor. It generates one line per simulated")
     print("  machine reading and sends it to the API you set up in step 1, which")
@@ -887,7 +889,7 @@ def main(
         if in_docker:
             detect_script = Path(__file__).parent.parent / "scripts" / "detect_drift.py"
             print("\n" + "─" * 60)
-            print("  Checking for drift on the readings you just generated...")
+            print("  Predictive Maintenance  - Drift Detection")
             print("─" * 60 + "\n")
             result = subprocess.run([sys.executable, str(detect_script)])
             # exit 1 means "drift detected", not "I crashed" — do not propagate it

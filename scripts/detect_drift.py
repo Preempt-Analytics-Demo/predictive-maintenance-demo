@@ -381,11 +381,6 @@ Examples:
     # Stage 3 below writes this same path, so this only reads True once.
     is_first_run = not pathlib.Path(args.report).exists()
 
-    # ── Stage 1: Load data ────────────────────────────────────────────────────
-    print("-" * 72)
-    print("  Predictive Maintenance  - Drift Detection")
-    print("-" * 72)
-
     # ── First-run primer ─────────────────────────────────────────────────────
     # The [1/4]..[4/4] stages below are a technical report — column names,
     # distances, thresholds — written for someone debugging a drift alert, not
@@ -394,12 +389,19 @@ Examples:
     # retrain) ties it to the pipeline instead of leaving it self-contained
     # (Redish: connect to the greater whole), before the wall of statistics
     # below can read like an error screen on its own.
+    print()
+    print("  ── Drift Detection primer ────────────────────────────────────────────────")
     print("  This step runs Drift Detection — it compares the readings your")
     print("  simulation just generated to the data the model was originally")
     print("  trained on, to check whether its assumptions about the factory")
     print("  floor still hold. If too many features have shifted, the pipeline")
     print("  retrains the model automatically. The detail below is technical —")
     print("  skip to the verdict at the bottom for the headline result.")
+
+    # ── Stage 1: Load data ────────────────────────────────────────────────────
+    print()
+    print("  Checking for drift on the readings you just generated...")
+    print()
 
     # ── Smoke-test pause ──────────────────────────────────────────────────────
     # Only fires on a genuinely first-ever run AND only when a human is at the
