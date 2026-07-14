@@ -396,6 +396,16 @@ def _diagnose_failure(output: str) -> str | None:
 # .env.demo) and injects it via GIT_SSH_COMMAND so git push authenticates
 # regardless of which hostname the origin remote points to. Returns None on the
 # host where ~/.ssh/config already handles authentication normally.
+#
+# -i alone (a prior version of this function) supplies the credential but not
+# hostname resolution: when a developer's local `origin` uses a personal SSH
+# alias (e.g. git@github-preempt, set up on the host so ordinary `git push`
+# uses this project's deploy key instead of their default one), the container
+# has no such alias and ssh fails with "Could not resolve hostname" before
+# authentication is even attempted. -o HostName=github.com fixes that for good:
+# it forces the real connect target regardless of what alias `origin` uses, so
+# this keeps working whether origin is the alias or plain git@github.com — no
+# more chasing whichever form `origin` happens to be in on a given machine.
 
 def _make_ssh_env() -> dict[str, str] | None:
     """Return a GIT_SSH_COMMAND env dict that authenticates git with the deploy key.
@@ -414,12 +424,13 @@ def _make_ssh_env() -> dict[str, str] | None:
     key_file.close()
     os.chmod(key_file.name, 0o600)  # SSH client refuses keys readable by others
 
-    # Inject the key directly via -i so it applies to any SSH hostname.
-    # Using -i avoids the need for a Host alias in ~/.ssh/config — the deploy
-    # key works whether origin is git@github.com or any alias pointing there.
+    # -i supplies the credential; -o HostName pins the actual connect target to
+    # GitHub's real host so any alias `origin` happens to use still resolves —
+    # this command only ever pushes this project's own data to its own repo.
     return {
         "GIT_SSH_COMMAND": (
             f"ssh -i {key_file.name}"
+            f" -o HostName=github.com"        # resolve regardless of origin's alias
             f" -o StrictHostKeyChecking=no"   # no known_hosts DB inside the container
             f" -o UserKnownHostsFile=/dev/null"  # suppress "unknown host" warnings
         )
