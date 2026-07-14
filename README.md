@@ -30,7 +30,12 @@ Install it and make sure it is running (you should see the Docker whale icon in 
 
 ## Setup — three commands
 
-Open a terminal and run these three commands in order:
+Open a your OS specific command line interface and run these three commands in order:
+
+> <b>On Windows:</b> Powershell / Terminal / CMD
+
+> <b>On Mac:</b>
+> Terminal
 
 ```bash
 # 1. Download the project
