@@ -375,6 +375,12 @@ Examples:
     )
     args = parser.parse_args()
 
+    # ── First-run detection ───────────────────────────────────────────────────
+    # No prior HTML report on disk means drift detection has never completed
+    # here before — the README's one-time smoke test, not a routine check.
+    # Stage 3 below writes this same path, so this only reads True once.
+    is_first_run = not pathlib.Path(args.report).exists()
+
     # ── Stage 1: Load data ────────────────────────────────────────────────────
     print("-" * 72)
     print("  Predictive Maintenance  - Drift Detection")
@@ -383,14 +389,27 @@ Examples:
     # ── First-run primer ─────────────────────────────────────────────────────
     # The [1/4]..[4/4] stages below are a technical report — column names,
     # distances, thresholds — written for someone debugging a drift alert, not
-    # for a first-time reader who just typed the run command. Without framing,
-    # "Drift Detection" plus a wall of statistics reads like an error screen.
-    # One plain-language sentence first (Krug), pointing to the verdict at the
-    # bottom so the technical middle can be skipped on a first read.
-    print("  This compares today's simulated readings to the data the model was")
-    print("  trained on, to check it's still seeing what it expects. The detail")
-    print("  below is technical — skip to the verdict at the bottom for the")
-    print("  headline result.")
+    # for a first-time reader who just typed the run command. Naming what feeds
+    # this step (the simulation just run) and what it feeds (an automatic
+    # retrain) ties it to the pipeline instead of leaving it self-contained
+    # (Redish: connect to the greater whole), before the wall of statistics
+    # below can read like an error screen on its own.
+    print("  This step runs Drift Detection — it compares the readings your")
+    print("  simulation just generated to the data the model was originally")
+    print("  trained on, to check whether its assumptions about the factory")
+    print("  floor still hold. If too many features have shifted, the pipeline")
+    print("  retrains the model automatically. The detail below is technical —")
+    print("  skip to the verdict at the bottom for the headline result.")
+
+    # ── Smoke-test pause ──────────────────────────────────────────────────────
+    # Only fires on a genuinely first-ever run AND only when a human is at the
+    # keyboard (isatty()). The isatty() check is the real safety net: monitor.py
+    # calls this script every 30s as a background subprocess with no TTY, so
+    # this never blocks the automatic drift → retrain loop, even if first-run
+    # detection above is ever wrong.
+    if is_first_run and sys.stdin.isatty():
+        input("  Press Enter to continue...")
+        print()
 
     print(f"\n[1/4] Reference data  : {args.csv}")
     reference = load_reference_data(pathlib.Path(args.csv))

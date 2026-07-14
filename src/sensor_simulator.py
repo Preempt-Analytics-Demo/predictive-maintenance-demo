@@ -792,6 +792,12 @@ def main(
 
     conn = init_db(DB_PATH)
 
+    # ── First-run detection ──────────────────────────────────────────────────
+    # Checked BEFORE --reset can delete anything, so a returning user who resets
+    # and reruns is still recognised as "not first run" — the pause below is
+    # for the README's one-time smoke test, not every clean-slate rerun.
+    is_first_run = conn.execute("SELECT COUNT(*) FROM sensor_readings").fetchone()[0] == 0
+
     if reset:
         # DELETE removes all rows but keeps the table and file intact.
         # This is equivalent to rm simulation.db followed by a fresh init,
@@ -813,12 +819,25 @@ def main(
     # What follows is hundreds of scrolling status lines — the single most
     # disorienting moment for someone running this for the first time, since
     # nothing before it explains what a "reading" is or why there are so many.
-    # One plain-language sentence up front answers "did I just break it?"
-    # before the wall of text can raise the question (Krug: don't make me think).
-    print("  What you're about to see: one line per simulated sensor reading —")
-    print("  a virtual machine sending live data to your API, which predicts")
-    print("  failure risk in real time. This is expected output, not an error;")
-    print("  let it scroll, or skip ahead once it finishes.\n")
+    # Naming the API from step 1 ties this step to the pipeline the reader
+    # already built, not just to itself (Redish: connect to the greater whole)
+    # before the wall of text can raise "did I just break it?" on its own.
+    print("  This step runs the Simulation Engine — built to mimic real sensor")
+    print("  readings from a factory floor. It generates one line per simulated")
+    print("  machine reading and sends it to the API you set up in step 1, which")
+    print("  predicts failure risk in real time. This is expected output, not")
+    print("  an error; let it scroll, or skip ahead once it finishes. In a real")
+    print("  deployment, actual machine sensors would take the simulator's place.\n")
+
+    # ── Smoke-test pause ──────────────────────────────────────────────────────
+    # Only fires on a genuinely first-ever run (empty DB) AND only when a human
+    # is at the keyboard (isatty()). The isatty() check is the real safety net:
+    # docker compose run allocates no TTY for the monitor container's background
+    # subprocess calls, so this never blocks the automatic drift → retrain loop
+    # even if first-run detection above is ever wrong.
+    if is_first_run and sys.stdin.isatty():
+        input("  Press Enter to continue...")
+        print()
 
     print("  Database ready. Starting simulation...\n")
 
