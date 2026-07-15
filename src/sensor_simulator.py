@@ -853,6 +853,13 @@ def main(
 
     print("  Database ready. Starting simulation...\n")
 
+    # Captured before the loop writes anything, so every row this run stores
+    # gets a timestamp strictly after this value — lets the drift check below
+    # scope itself to "readings this run generated" via --since, instead of
+    # diluting a fresh injected spike against every past run's data sitting
+    # in simulation.db.
+    run_started_at = datetime.now(timezone.utc).isoformat()
+
     try:
         run_simulation(api_url, conn, mode, n_readings, interval, n_machines)
     finally:
@@ -874,7 +881,7 @@ def main(
         )
     if run_detection:
         detect_script = Path(__file__).parent.parent / "scripts" / "detect_drift.py"
-        cmd = [sys.executable, str(detect_script)]
+        cmd = [sys.executable, str(detect_script), "--since", run_started_at]
         if export_on_drift:
             cmd.append("--export-on-drift")   # pass through: export+push on drift
         if pause:
@@ -903,7 +910,7 @@ def main(
             print("\n" + "─" * 60)
             print("  Predictive Maintenance  - Drift Detection")
             print("─" * 60 + "\n")
-            cmd = [sys.executable, str(detect_script)]
+            cmd = [sys.executable, str(detect_script), "--since", run_started_at]
             if pause:
                 cmd.append("--pause")   # pass through: force detect_drift.py's own primer pause
             result = subprocess.run(cmd)
