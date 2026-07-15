@@ -373,6 +373,18 @@ Examples:
             "Only safe when the simulator ran in --mode normal."
         ),
     )
+    parser.add_argument(
+        "--pause",
+        action="store_true",
+        default=False,
+        help=(
+            "Show the Press-Enter primer pause even if a report already exists. "
+            "By default the pause only fires once, ever, on a genuinely first run — "
+            "the background monitor container re-creates the report every 30s, so "
+            "without this flag the pause almost never fires in practice. Passed "
+            "through automatically when the simulator is run with --pause."
+        ),
+    )
     args = parser.parse_args()
 
     # ── First-run detection ───────────────────────────────────────────────────
@@ -403,12 +415,13 @@ Examples:
     # ── Smoke-test pause ──────────────────────────────────────────────────────
     # Sits right after the primer and before any status output, so the reader
     # has actually seen the explanation before the technical report starts
-    # scrolling. Only fires on a genuinely first-ever run AND only when a human
-    # is at the keyboard (isatty()). The isatty() check is the real safety net:
-    # monitor.py calls this script every 30s as a background subprocess with no
-    # TTY, so this never blocks the automatic drift → retrain loop, even if
-    # first-run detection above is ever wrong.
-    if is_first_run and sys.stdin.isatty():
+    # scrolling. Fires on a genuinely first-ever run or when --pause forces it
+    # (the background monitor container re-creates the report every 30s, so
+    # is_first_run alone is almost always False by the time a human runs this
+    # manually). Always still gated on isatty(): monitor.py calls this script
+    # every 30s as a background subprocess with no TTY, so this never blocks
+    # the automatic drift → retrain loop.
+    if (is_first_run or args.pause) and sys.stdin.isatty():
         input("  Press Enter to continue...")
         print()
 

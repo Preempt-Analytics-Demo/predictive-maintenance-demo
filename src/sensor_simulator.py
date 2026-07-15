@@ -877,6 +877,8 @@ def main(
         cmd = [sys.executable, str(detect_script)]
         if export_on_drift:
             cmd.append("--export-on-drift")   # pass through: export+push on drift
+        if pause:
+            cmd.append("--pause")   # pass through: force detect_drift.py's own primer pause
         print("\n" + "─" * 60)
         print("  Auto drift detection starting...")
         print("─" * 60 + "\n")
@@ -901,7 +903,10 @@ def main(
             print("\n" + "─" * 60)
             print("  Predictive Maintenance  - Drift Detection")
             print("─" * 60 + "\n")
-            result = subprocess.run([sys.executable, str(detect_script)])
+            cmd = [sys.executable, str(detect_script)]
+            if pause:
+                cmd.append("--pause")   # pass through: force detect_drift.py's own primer pause
+            result = subprocess.run(cmd)
             # exit 1 means "drift detected", not "I crashed" — do not propagate it
             if result.returncode > 1:
                 sys.exit(result.returncode)
