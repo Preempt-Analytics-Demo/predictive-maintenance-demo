@@ -46,7 +46,7 @@ cd predictive-maintenance-demo
 docker compose up -d
 
 # 3. Smoke test — verify the simulation engine is talking to the prediction API
-docker compose run --rm simulator --mode normal --n-readings 500
+docker compose run --rm simulator --mode normal --n-readings 500 --pause
 ```
 
 **What just happened:**
