@@ -39,15 +39,22 @@ Open a your OS specific <a id="ref-cli"></a>[command line interface](#glossary-c
 > <b>On Mac:</b>
 > Terminal
 
+**1. Download the project**
+
 ```bash
-# 1. Download the project
 git clone https://github.com/Preempt-Analytics-Demo/predictive-maintenance-demo.git
 cd predictive-maintenance-demo
+```
 
-# 2. Start the prediction API and the drift monitor (runs silently in the background)
+**2. Start the prediction API and the drift monitor** (runs silently in the background)
+
+```bash
 docker compose up -d
+```
 
-# 3. Smoke test — verify the simulation engine is talking to the prediction API
+**3. Smoke test** — verify the simulation engine is talking to the prediction API
+
+```bash
 docker compose run --rm simulator --mode normal --n-readings 500 --pause
 ```
 
@@ -97,6 +104,17 @@ docker compose run --rm simulator --mode sudden-spike --n-readings 1000 --demo; 
 
 ## Explore the prediction API
 
+The easiest way to see it working — one command, identical on every platform:
+
+```bash
+docker compose exec api python scripts/try_prediction.py
+```
+
+This sends one sample sensor reading to the API and explains the result in plain language — no JSON, no curl, no shell-specific syntax to get right.
+
+<details>
+<summary><b>For developers — query the API directly with curl</b></summary>
+
 Want to query the API directly? Run these from any terminal while the system is up.
 
 Check the API is healthy and which model version is loaded:
@@ -143,6 +161,8 @@ curl.exe -X POST http://localhost:8000/predict -H "Content-Type: application/jso
 ```
 
 You should see something like: `{"machine_failure": 0, "failure_probability": 0.0001, "failure_type": null, "model_name": "predictive-maintenance-binary", "model_version": "2"}`
+
+</details>
 
 ---
 
