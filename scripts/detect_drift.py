@@ -422,6 +422,7 @@ Examples:
     print("  floor still hold. If too many features have shifted, the pipeline")
     print("  retrains the model automatically. The detail below is technical —")
     print("  skip to the verdict at the bottom for the headline result.")
+    print()
 
     # ── Smoke-test pause ──────────────────────────────────────────────────────
     # Sits right after the primer and before any status output, so the reader
@@ -527,6 +528,7 @@ Examples:
             print(f"  To export and retrain: python scripts/export_simulation_to_parquet.py --push --retrain")
     else:
         print(f"\n  PASS — distribution looks stable. No retraining triggered.")
+        print()
         if args.export_on_drift:
             # No drift: export CSV to keep the training dataset growing, but do NOT update
             # retrain.trigger — the workflow stays silent because there is nothing to learn.
