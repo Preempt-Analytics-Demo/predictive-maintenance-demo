@@ -960,9 +960,11 @@ def main(
                     "\n  within ~1 minute. Watch the job run:"
                     "\n  https://github.com/Preempt-Analytics-Demo/predictive-maintenance-demo/actions"
                 )
+                print()
         else:
             print("\nNext: run drift detection to check for feature distribution shift.")
             print("  python scripts/detect_drift.py")
+            print()
 
 
 if __name__ == "__main__":

@@ -528,7 +528,6 @@ Examples:
             print(f"  To export and retrain: python scripts/export_simulation_to_parquet.py --push --retrain")
     else:
         print(f"\n  PASS — distribution looks stable. No retraining triggered.")
-        print()
         if args.export_on_drift:
             # No drift: export CSV to keep the training dataset growing, but do NOT update
             # retrain.trigger — the workflow stays silent because there is nothing to learn.
@@ -549,6 +548,7 @@ Examples:
             f"python src/sensor_simulator.py --n-readings 200"
         )
 
+    print()
     sys.exit(1 if drift_share >= args.threshold else 0)
 
 
