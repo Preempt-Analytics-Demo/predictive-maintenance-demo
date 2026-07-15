@@ -36,7 +36,11 @@ KEY VOCABULARY (read once, then the code will make sense)
   Chi-squared test  : used for categorical features (machine type L/M/H).
                       Tests whether the proportions of categories have changed.
   DRIFT_THRESHOLD   : the fraction of drifted features above which we raise an
-                      alert.  Default is 0.25 — override with --threshold.
+                      alert.  Default is 0.2 — override with --threshold. This
+                      is a different, unrelated number from the per-feature
+                      test threshold (0.1) shown in the per-column table below —
+                      one caps an individual feature's distance, the other caps
+                      what share of all features may fail before we alert.
 
 EVIDENTLY API (version 0.7.x) — what is different from older tutorials
 ──────────────────────────────────────────────────────────────────────────
@@ -100,10 +104,11 @@ REPORT_DIR    = _ROOT / "reports"                         # where the HTML repor
 # ai4i2020_baseline.csv is locked at project start and never changes, so drift
 # is always measured against the same original ground truth.
 
-# 0.33 ≈ 3/9 — alert if two or more features drift. Missing real drift is more costly
-# than a false alarm in a safety-critical context (unplanned downtime, failed components),
-# so we err on the side of sensitivity without triggering on a single noisy feature.
-# Override at runtime with --threshold without editing this file.
+# 0.2 * 9 features ≈ 1.8 — alert once two or more features drift. Missing real
+# drift is more costly than a false alarm in a safety-critical context (unplanned
+# downtime, failed components), so we err on the side of sensitivity without
+# triggering on a single noisy feature. Override at runtime with --threshold
+# without editing this file.
 DRIFT_THRESHOLD = 0.2
 
 # Evidently's statistical tests (KS, Wasserstein) plateau in accuracy at around
@@ -296,6 +301,12 @@ def print_per_column_results(result: dict) -> None:
                                  Jensen-Shannon distance (output: distance; drift if > 0.1)
     The threshold shown next to each row is the one Evidently used internally.
     """
+    # "Thresh" below is per-feature — it decides one row's Drift? column. It is
+    # not the same number as the "Threshold" printed in the [4/4] Verdict further
+    # down, which is the separate, unrelated share of *all* features that must
+    # individually drift before the whole run is flagged. Two different scales;
+    # spelled out here since seeing 0.10 and 20% side by side otherwise reads
+    # like a contradiction.
     print(f"\n  {'Feature':<28} {'Test':<30} {'Value':>10}  {'Thresh':>7}  Drift?")
     print("  " + "-" * 78)
 
@@ -485,6 +496,8 @@ Examples:
     drift_share, drifted_count, total_count = extract_drift_summary(result)
 
     print(f"[4/4] Verdict")
+    print(f"      (this threshold is separate from the per-feature 'Thresh' column above —")
+    print(f"       that one decides a single feature's Drift? column; this one decides the run)")
     print(f"      Threshold  : {args.threshold:.0%} of features must drift to trigger alert")
     print(f"      Detected   : {drifted_count}/{total_count} features drifted ({drift_share:.0%})")
 
