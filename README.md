@@ -75,14 +75,16 @@ The system can detect when the data starts behaving differently (called <a id="r
 **Mac / Linux**
 
 ```bash
-docker compose run --rm simulator --mode sudden-spike --n-readings 1000 && ./open_results.sh
+docker compose run --rm simulator --mode sudden-spike --n-readings 1000 --demo && ./open_results.sh
 ```
 
 **Windows (PowerShell)**
 
 ```powershell
-docker compose run --rm simulator --mode sudden-spike --n-readings 1000; .\open_results.ps1
+docker compose run --rm simulator --mode sudden-spike --n-readings 1000 --demo; .\open_results.ps1
 ```
+
+`--demo` prints a short walkthrough of what's about to happen (and pauses for Enter) before the run starts — drop it if you just want the readings generated without the explanation.
 
 **What happens:**
 

@@ -774,6 +774,14 @@ def run_simulation(
         "Only safe with --mode normal."
     ),
 )
+@click.option(
+    "--demo", is_flag=True, default=False,
+    help=(
+        "Print a short welcome explaining the full retraining-loop walkthrough "
+        "(simulation, drift check, browser report, GitHub Actions) before starting. "
+        "Purely informational — does not change what the run actually does."
+    ),
+)
 def main(
     mode: str,
     n_readings: int,
@@ -784,12 +792,41 @@ def main(
     pause: bool,
     detect_drift: bool,
     export_on_drift: bool,
+    demo: bool,
 ) -> None:
     """Simulate sensor readings, send each to the prediction API, and store results.
 
     The API must be running before the simulator starts. Start it with:
       uvicorn src.api:app --reload
     """
+    # ── Full retraining-loop welcome ─────────────────────────────────────────
+    # README's "Trigger the full retraining loop" command chains this simulator
+    # with open_results.ps1/.sh, so half of what --demo describes (the browser
+    # and GitHub Actions steps) is orientation for a script this file does not
+    # itself run — a reader watching the whole two-command sequence still needs
+    # to know it's coming, per the same front-load-the-context primer approach
+    # used elsewhere in this file.
+    if demo:
+        print()
+        print("═" * 60)
+        print("  Full retraining loop — what's about to happen")
+        print("═" * 60)
+        print()
+        print("  1. 1,000 abnormal readings will be generated and sent to the")
+        print("     prediction API.")
+        print("  2. Drift detection will run immediately and print a report in")
+        print("     this terminal — you'll see which sensor features shifted")
+        print("     and whether the threshold was crossed.")
+        print("  3. The drift report will open in your browser")
+        print("     (reports/drift_report.html).")
+        print("  4. The GitHub Actions page will open — if drift was detected,")
+        print("     a retraining workflow will appear there within ~1 minute")
+        print("     and run automatically.")
+        print()
+        if sys.stdin.isatty():
+            input("  Press Enter to continue...")
+            print()
+
     print("\nPredictive Maintenance — Sensor Simulator")
     print(f"  Mode       : {mode}")
     print(f"  Machines   : {n_machines}")
