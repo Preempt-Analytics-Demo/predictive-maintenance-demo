@@ -107,15 +107,42 @@ curl http://localhost:8000/health
 
 You should see something like: `{"status": "ok", "model_loaded": true}`
 
-Send a single <a id="ref-prediction-request"></a>[prediction request](#glossary-prediction-request):
+Send a single <a id="ref-prediction-request"></a>[prediction request](#glossary-prediction-request). The field names below (`machine_type`, `air_temperature_kelvin`, etc.) are what the API actually expects — not the raw sensor CSV's column names (`Type`, `Air temperature [K]`, ...); those get translated internally.
+
+**Mac / Linux**
 
 ```bash
 curl -X POST http://localhost:8000/predict \
   -H "Content-Type: application/json" \
-  -d '{"Type": "M", "Air temperature [K]": 298.1, "Process temperature [K]": 308.6, "Rotational speed [rpm]": 1551, "Torque [Nm]": 42.8, "Tool wear [min]": 0}'
+  -d '{"machine_type": "M", "air_temperature_kelvin": 298.1, "process_temperature_kelvin": 308.6, "rotational_speed_rpm": 1551, "torque_nm": 42.8, "tool_wear_minutes": 0}'
 ```
 
-You should see something like: `{"prediction": "normal", "probability": 0.03}`
+**Windows (PowerShell)**
+
+The `\` line-continuation above is bash-only — pasted into PowerShell it runs each line as a separate command. Use `Invoke-RestMethod` instead, which sidesteps quoting entirely:
+
+```powershell
+$body = @{
+    machine_type = "M"
+    air_temperature_kelvin = 298.1
+    process_temperature_kelvin = 308.6
+    rotational_speed_rpm = 1551
+    torque_nm = 42.8
+    tool_wear_minutes = 0
+} | ConvertTo-Json
+
+Invoke-RestMethod -Uri http://localhost:8000/predict -Method Post -ContentType "application/json" -Body $body
+```
+
+**Windows (Command Prompt)**
+
+Command Prompt doesn't support `\` continuation or single-quoted strings either — paste this as one line:
+
+```
+curl.exe -X POST http://localhost:8000/predict -H "Content-Type: application/json" -d "{\"machine_type\": \"M\", \"air_temperature_kelvin\": 298.1, \"process_temperature_kelvin\": 308.6, \"rotational_speed_rpm\": 1551, \"torque_nm\": 42.8, \"tool_wear_minutes\": 0}"
+```
+
+You should see something like: `{"machine_failure": 0, "failure_probability": 0.0001, "failure_type": null, "model_name": "predictive-maintenance-binary", "model_version": "2"}`
 
 ---
 
