@@ -276,6 +276,13 @@ schedule.every(5).minutes.do(check_drift)
 schedule.every().day.at("02:00").do(check_drift)
 ```
 
+**Picking up a new image after a code change:** pushing to `main` triggers `docker-publish.yml`, which builds and pushes a fresh `:latest` image to GHCR — but `docker compose down` / `up` alone will keep reusing whatever image is already cached locally, since `:latest` is a mutable tag Docker doesn't recheck on its own. Force it:
+
+```bash
+docker compose pull
+docker compose up -d
+```
+
 ---
 
 ## Running individual steps manually
