@@ -213,15 +213,17 @@ POST /predict  ──►  API container (port 8000)  ──►  ML model (@produ
 
 ## While GitHub Actions is running
 
-The diagram above ends with "GitHub Actions fires" — here's what that actually looks like once you click into it, and why it's safe to just let it run.
+You don't need to do anything — it's safe to just let it run.
 
-**What it's doing:** Training a new version of the prediction model on the full sensor dataset — now including the readings you just generated — the same way the original model was trained, just automatic and unattended.
+**What it's doing:** Training a new version of the prediction model on the full sensor dataset, now including the readings you just generated.
 
 **How long it takes:** A few minutes. A list of steps runs top to bottom, each one turning green as it finishes.
 
-**What the result means:** All green means the new model was trained and tested successfully. A red step means something failed — the current model just keeps running exactly as before, so nothing breaks.
+**What "all green" means:** The new model was trained and tested successfully.
 
-**Does the new model actually go live?** Only if it's measurably more accurate than the one currently in use. The workflow checks this automatically before switching anything, so a worse model can never take over by accident.
+**What a red step means:** Something failed — the current model just keeps running exactly as before. Nothing breaks.
+
+**Does the new model go live automatically?** Only if it's measurably more accurate than the one currently in use. The workflow checks this before switching anything, so a worse model can never take over by accident.
 
 ---
 
