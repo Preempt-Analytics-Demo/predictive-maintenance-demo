@@ -36,10 +36,14 @@ fi
 # export + DagsHub upload, and GitHub Actions picking up the push each add
 # real time — the workflow is reliably visible and running by ~4 minutes, not
 # the 90 s this used to wait. Opening earlier just shows an empty Actions page
-# with no run yet, which reads as "did this actually work?" to a first-time user.
+# with no run yet, which reads as "did this actually work?" to a first-time
+# user — so the wait itself is explained up front, in plain terms, before the
+# countdown starts (Redish: say what's happening and why before the numbers).
 echo ""
-echo "  GitHub Actions will open automatically once the retraining workflow"
-echo "  has had time to appear (this reliably takes a few minutes end to end)."
+echo "  Please be patient — retraining takes a little while to fire."
+echo "  How long depends on your machine's speed, not on anything going wrong."
+echo "  GitHub Actions will open as soon as the run is ready to watch."
+echo ""
 echo "  Opening in 240 seconds..."
 sleep 60 && echo "  Opening in 180 seconds..."
 sleep 60 && echo "  Opening in 120 seconds..."
