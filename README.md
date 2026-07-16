@@ -98,7 +98,7 @@ docker compose run --rm simulator --mode sudden-spike --n-readings 1000 --demo; 
 1. 1,000 abnormal readings are generated and sent to the prediction API
 2. Drift detection runs immediately and prints a report in this terminal — you will see which sensor features shifted and whether the threshold was crossed
 3. The <a id="ref-drift-report"></a>[drift report](#glossary-drift-report) opens in your browser (`reports/drift_report.html`)
-4. The <a id="ref-github-actions"></a>[GitHub Actions](#glossary-github-actions) page opens — if drift was detected, a retraining workflow appears there within ~1 minute and runs automatically
+4. The <a id="ref-github-actions"></a>[GitHub Actions](#glossary-github-actions) page opens — if drift was detected, a retraining workflow appears there within a few minutes and runs automatically
 
 ---
 
@@ -212,7 +212,7 @@ POST /predict  ──►  API container (port 8000)  ──►  ML model (@produ
                                                             │
                                                      simulation.db
                                                             │
-                                              Monitor checks every ~1 min (demo)
+                                              Monitor checks every ~30s (demo)
                                                             │
                                               Drift detected?
                                                ├── No  → wait

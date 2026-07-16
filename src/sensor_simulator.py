@@ -820,7 +820,7 @@ def main(
         print("  3. The drift report will open in your browser")
         print("     (reports/drift_report.html).")
         print("  4. The GitHub Actions page will open — if drift was detected,")
-        print("     a retraining workflow will appear there within ~1 minute")
+        print("     a retraining workflow will appear there within a few minutes")
         print("     and run automatically.")
         print()
         if sys.stdin.isatty():
@@ -957,7 +957,7 @@ def main(
             if result.returncode == 1:   # drift detected — point user to Actions
                 print(
                     "\n  The drift monitor will trigger retraining automatically"
-                    "\n  within ~1 minute. Watch the job run:"
+                    "\n  within a few minutes. Watch the job run:"
                     "\n  https://github.com/Preempt-Analytics-Demo/predictive-maintenance-demo/actions"
                 )
                 print()

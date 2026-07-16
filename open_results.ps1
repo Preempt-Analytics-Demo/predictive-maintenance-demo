@@ -26,15 +26,18 @@ if (Test-Path $Report) {
 }
 
 # -- Open GitHub Actions after a delay -----------------------------------------
-# The background monitor needs up to ~60 s to detect drift and push the retrain
-# trigger, then GitHub Actions takes a few more seconds to start the workflow.
-# Waiting 90 s here means the new run will be visible (or just starting) when
-# the page opens, rather than appearing empty and confusing the user.
+# Measured in practice, not estimated: the monitor's own check interval, the
+# export + DagsHub upload, and GitHub Actions picking up the push each add
+# real time - the workflow is reliably visible and running by ~4 minutes, not
+# the 90 s this used to wait. Opening earlier just shows an empty Actions page
+# with no run yet, which reads as "did this actually work?" to a first-time user.
 Write-Host ""
 Write-Host "  GitHub Actions will open automatically once the retraining workflow"
-Write-Host "  has had time to appear (the monitor needs up to ~90 s to fire)."
-Write-Host "  Opening in 90 seconds..."
-Start-Sleep 30; Write-Host "  Opening in 60 seconds..."
+Write-Host "  has had time to appear (this reliably takes a few minutes end to end)."
+Write-Host "  Opening in 240 seconds..."
+Start-Sleep 60; Write-Host "  Opening in 180 seconds..."
+Start-Sleep 60; Write-Host "  Opening in 120 seconds..."
+Start-Sleep 60; Write-Host "  Opening in 60 seconds..."
 Start-Sleep 30; Write-Host "  Opening in 30 seconds..."
 Start-Sleep 30
 Write-Host "  Opening GitHub Actions: $Actions"

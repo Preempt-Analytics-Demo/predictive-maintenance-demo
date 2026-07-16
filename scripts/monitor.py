@@ -172,14 +172,14 @@ def check_drift() -> None:
     #
     # GitHub Actions watches retrain.trigger — a change there fires retrain.yml.
     print("\n  ◆  PHASE 2/2 — Uploading data and triggering retraining…")
-    print("     This may take a minute. Please wait.\n")
+    print("     This may take a few minutes — the DagsHub upload is the slow part. Please wait.\n")
     export_result = subprocess.run(
         ["python", "scripts/export_simulation_to_parquet.py", "--purge", "--push", "--retrain"],
         cwd=ROOT,
     )
 
     if export_result.returncode != 0:
-        print("\n  ERROR: Upload/push failed. Will retry on the next check (in ~1 minute).")
+        print("\n  ERROR: Upload/push failed. Will retry on the next check (in ~30s).")
         print("  If this keeps failing, check README → 'Trigger the full retraining loop'.")
         _append_log(drift_detected=True, retrain_triggered=False)
         return
