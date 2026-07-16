@@ -154,6 +154,29 @@ REPO_ROOT      = Path(__file__).resolve().parent.parent
 DB_PATH        = REPO_ROOT / "data" / "simulation.db"  # inside data/ so the existing Docker volume covers it
 DEFAULT_OUTPUT = REPO_ROOT / "data" / "ai4i2020.parquet"  # Parquet replaces the growing CSV
 
+# ── Rolling cap on accumulated simulated data ─────────────────────────────────
+# ai4i2020.parquet is a single file shared by every demo user on the same
+# DagsHub remote — it has no natural ceiling, so every successful retrain from
+# every user (or automated trigger) makes it a little bigger, forever. That
+# directly slows down the next dvc push, the next GitHub Actions dvc pull, and
+# every subsequent retrain's training time — a shared, compounding cost, not a
+# per-user one. BASELINE_ROW_COUNT matches the original AI4I dataset's UDI
+# range (1-10,000) exactly, so those rows are never trimmed. MAX_SIMULATED_ROWS
+# reuses detect_drift.py's CURRENT_DATA_LIMIT reasoning: Evidently's tests
+# plateau in accuracy around 5,000-10,000 rows, so keeping more simulated rows
+# than that buys nothing — it only makes every future export slower to upload.
+BASELINE_ROW_COUNT = 10_000
+MAX_SIMULATED_ROWS = 10_000
+
+# ── Retrain cooldown ───────────────────────────────────────────────────────────
+# retrain.trigger is the one file every trigger path shares (monitor.py,
+# --export-on-drift, manual runs), so gating it here throttles all of them at
+# once. This is a courtesy for well-behaved callers only — it cannot stop
+# someone using the deploy key directly to push a retrain.trigger change,
+# bypassing this script entirely. retrain.yml's own workflow-level check is
+# what actually protects against that; keep both cooldown values in sync.
+RETRAIN_COOLDOWN_SECONDS = 3600  # 1 hour
+
 # ── Failure type derivation thresholds ───────────────────────────────────────
 # From Matzka (2020) — the same rules used to generate the original labels.
 
@@ -304,6 +327,32 @@ def purge_exported_rows(db_path: Path, row_ids: list[int]) -> int:
     return deleted
 
 
+def enforce_row_cap(df: pd.DataFrame) -> tuple[pd.DataFrame, int]:
+    """Keep the original baseline rows plus only the MAX_SIMULATED_ROWS most
+    recent simulated rows, dropping older simulated rows once the cap is
+    exceeded.
+
+    WHY filter by UDI instead of row position?
+    UDI is monotonically increasing and assigned in append order (see the
+    starting_udi logic in main()), so "highest UDI" and "most recently
+    simulated" are the same thing regardless of how the rows happen to be
+    ordered on disk. Filtering by value here is also self-documenting: it
+    doesn't rely on an unstated assumption that row order matches append order.
+
+    Returns the (possibly trimmed) DataFrame and how many rows were dropped,
+    so callers can report what happened instead of trimming silently.
+    """
+    simulated = df[df["UDI"] > BASELINE_ROW_COUNT]
+    if len(simulated) <= MAX_SIMULATED_ROWS:
+        return df, 0
+
+    baseline       = df[df["UDI"] <= BASELINE_ROW_COUNT]
+    kept_simulated = simulated.sort_values("UDI").tail(MAX_SIMULATED_ROWS)
+    trimmed        = pd.concat([baseline, kept_simulated], ignore_index=True)
+    dropped        = len(df) - len(trimmed)
+    return trimmed, dropped
+
+
 def convert_to_parquet_format(sim_df: pd.DataFrame, starting_udi: int) -> pd.DataFrame:
     """Convert simulation DataFrame to original CSV column layout.
 
@@ -443,7 +492,26 @@ def _make_ssh_env() -> dict[str, str] | None:
 # check=True raises CalledProcessError on a non-zero exit code, which stops
 # the sequence and prints the failing command's stderr so the cause is clear.
 
-def _push_to_remote(data_path: Path, n_rows: int, trigger_retrain: bool = False) -> None:
+def _seconds_since_last_retrain(retrain_trigger: Path) -> float | None:
+    """Return seconds since retrain.trigger last fired, or None if unknown.
+
+    None covers both "never triggered before" and "the existing file doesn't
+    parse" — both cases fail OPEN (allow the retrain) rather than silently
+    blocking one forever over a missing file or an unexpected format.
+    """
+    if not retrain_trigger.exists():
+        return None
+    try:
+        ts_str  = retrain_trigger.read_text().strip().split(": ", 1)[1]
+        last_ts = datetime.strptime(ts_str, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+        return (datetime.now(timezone.utc) - last_ts).total_seconds()
+    except (IndexError, ValueError):
+        return None
+
+
+def _push_to_remote(
+    data_path: Path, n_rows: int, trigger_retrain: bool = False, verb: str = "add"
+) -> None:
     """Run dvc add/push and git commit/push to update the training dataset.
 
     When trigger_retrain is True, retrain.trigger is also updated and staged.
@@ -454,21 +522,36 @@ def _push_to_remote(data_path: Path, n_rows: int, trigger_retrain: bool = False)
 
     Args:
         data_path:       Path to the Parquet file that was just written.
-        n_rows:          Number of newly exported rows (used in the commit message).
-        trigger_retrain: True → update retrain.trigger and fire GitHub Actions.
+        n_rows:          Number of rows the commit message should mention.
+        trigger_retrain: True → update retrain.trigger and fire GitHub Actions,
+                         unless RETRAIN_COOLDOWN_SECONDS hasn't elapsed yet —
+                         see _seconds_since_last_retrain().
                          False → push data only, no workflow triggered.
+        verb:            "add" for a normal export, "prune" when n_rows counts
+                         rows removed instead of added — only changes wording.
     """
     dvc_pointer     = Path(str(data_path) + ".dvc")             # data/ai4i2020.parquet.dvc
     retrain_trigger = REPO_ROOT / "retrain.trigger"             # project-root sentinel file
 
     if trigger_retrain:
+        elapsed = _seconds_since_last_retrain(retrain_trigger)
+        if elapsed is not None and elapsed < RETRAIN_COOLDOWN_SECONDS:
+            wait_min = int((RETRAIN_COOLDOWN_SECONDS - elapsed) // 60) + 1
+            click.echo(
+                f"\n  Retraining already ran less than an hour ago — skipping to avoid "
+                f"flooding the pipeline. Data will still upload; try triggering a retrain "
+                f"again in about {wait_min} minute(s)."
+            )
+            trigger_retrain = False   # falls through to the data-only branch below
+
+    if trigger_retrain:
         # Write a UTC timestamp so git log shows exactly when each retrain was triggered.
         ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         retrain_trigger.write_text(f"drift detected: {ts}\n")   # change content → workflow fires
-        commit_msg = f"retrain: add {n_rows:,} simulated observations [drift]"
+        commit_msg = f"retrain: {verb} {n_rows:,} simulated observations [drift]"
         git_add_targets = [str(dvc_pointer), str(retrain_trigger)]
     else:
-        commit_msg = f"data: add {n_rows:,} simulated observations [no retrain]"
+        commit_msg = f"data: {verb} {n_rows:,} simulated observations [no retrain]"
         git_add_targets = [str(dvc_pointer)]                     # retrain.trigger unchanged → no workflow
 
     # ── SSH environment (Docker only) ────────────────────────────────────────
@@ -585,6 +668,17 @@ def _push_to_remote(data_path: Path, n_rows: int, trigger_retrain: bool = False)
     help="Print full export summary (failure type counts, UDI range, first 3 rows). "
          "Default is one summary line — enough for the monitor's automated flow.",
 )
+@click.option(
+    "--prune-only",
+    is_flag=True,
+    default=False,
+    help=(
+        "Trim the EXISTING output file down to baseline + the most recent "
+        f"{MAX_SIMULATED_ROWS:,} simulated rows and stop — ignores simulation.db "
+        "entirely, so this runs even when there is nothing new to export. "
+        "Combine with --push to upload the trimmed file immediately."
+    ),
+)
 def main(
     output_path: str,
     db_path: str,
@@ -595,6 +689,7 @@ def main(
     push: bool,
     retrain: bool,
     verbose: bool,
+    prune_only: bool,
 ) -> None:
     """Convert simulation.db readings to the AI4I Parquet format for DVC retraining.
 
@@ -612,6 +707,38 @@ def main(
     """
     output = Path(output_path)
     db     = Path(db_path)
+
+    # ── Prune-only mode ────────────────────────────────────────────────────────
+    # Bypasses simulation.db entirely — this trims the file DVC already has on
+    # disk, which matters when the cap needs enforcing right now (e.g. a one-off
+    # cleanup) rather than waiting for the next simulation run to trigger it via
+    # the normal write path below.
+    if prune_only:
+        if not output.exists():
+            click.echo(f"ERROR: {output} does not exist — nothing to prune.", err=True)
+            sys.exit(1)
+        existing_full   = pd.read_parquet(output)
+        trimmed, dropped = enforce_row_cap(existing_full)
+        if dropped == 0:
+            click.echo(f"  {len(existing_full):,} rows — already within the "
+                       f"{MAX_SIMULATED_ROWS:,}-row simulated cap. Nothing to prune.")
+            return
+        click.echo(f"  Pruning {dropped:,} old simulated rows "
+                   f"({len(existing_full):,} -> {len(trimmed):,} rows).")
+        if dry_run:
+            click.echo("\n[DRY RUN] No files written.")
+            return
+        trimmed.to_parquet(output, index=False)
+        if push:
+            _push_to_remote(output, dropped, trigger_retrain=retrain, verb="prune")
+        else:
+            click.echo("\nNext steps:")
+            click.echo("  dvc add data/ai4i2020.parquet")
+            click.echo("  dvc push data/ai4i2020.parquet")
+            click.echo("  git add data/ai4i2020.parquet.dvc")
+            click.echo('  git commit -m "data: prune old simulated rows"')
+            click.echo("  git push")
+        return
 
     # ── Load simulation rows ───────────────────────────────────────────────────
     sim_df = load_simulation_rows(db, since)
@@ -638,9 +765,18 @@ def main(
     # --verbose: full breakdown useful when debugging data quality issues.
     failure_rate = export_df["Machine failure"].mean()
     total_after  = existing_count + len(export_df)
+    # The write step below applies the same MAX_SIMULATED_ROWS cap via
+    # enforce_row_cap() — this mirrors that math so --dry-run previews the
+    # real post-cap size instead of the uncapped total.
+    capped_total = min(total_after, BASELINE_ROW_COUNT + MAX_SIMULATED_ROWS)
+    size_note = (
+        f"dataset will reach {total_after:,} rows"
+        if capped_total == total_after
+        else f"dataset will be capped at {capped_total:,} rows (older simulated rows pruned)"
+    )
     click.echo(
         f"\n  {len(export_df):,} rows ready for upload  "
-        f"(failure rate {failure_rate:.0%}, dataset will reach {total_after:,} rows)"
+        f"(failure rate {failure_rate:.0%}, {size_note})"
     )
     if verbose:
         hdf_count = export_df["HDF"].sum()
@@ -666,8 +802,12 @@ def main(
 
     # ── Write ──────────────────────────────────────────────────────────────────
     if append and output.exists():
-        existing_full = pd.read_parquet(output)                       # load the full existing dataset
-        combined      = pd.concat([existing_full, export_df], ignore_index=True)
+        existing_full     = pd.read_parquet(output)                   # load the full existing dataset
+        combined          = pd.concat([existing_full, export_df], ignore_index=True)
+        combined, dropped = enforce_row_cap(combined)                 # keep the file from growing forever
+        if dropped:
+            click.echo(f"  Also pruned {dropped:,} old simulated rows to stay within the "
+                       f"{MAX_SIMULATED_ROWS:,}-row cap.")
         combined.to_parquet(output, index=False)                      # overwrite with combined rows
     else:
         output.parent.mkdir(parents=True, exist_ok=True)
