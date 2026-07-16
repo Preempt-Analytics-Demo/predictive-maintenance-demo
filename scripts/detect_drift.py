@@ -522,10 +522,11 @@ Examples:
                 print("\n  ERROR: Export/push failed - see the detail printed above.")
                 print(f"  Retry manually once the issue is fixed: python {export_script} --push --retrain")
                 sys.exit(1)
-        else:
-            # Keep it to one line: the monitor will print its own follow-up,
-            # and a standalone caller just needs to know the one command to run.
-            print(f"  To export and retrain: python scripts/export_simulation_to_parquet.py --push --retrain")
+        # No else branch here: without --export-on-drift, nothing exports on this
+        # call. The background monitor container picks up the same drift on its
+        # own next tick and exports+retrains automatically — printing a manual
+        # command here would tell a first-time reader to do by hand what already
+        # happens without them.
     else:
         print(f"\n  PASS — distribution looks stable. No retraining triggered.")
         if args.export_on_drift:
