@@ -45,6 +45,8 @@ Start-Sleep 60; Write-Host "  Opening in 120 seconds..."
 Start-Sleep 60; Write-Host "  Opening in 60 seconds..."
 Start-Sleep 30; Write-Host "  Opening in 30 seconds..."
 Start-Sleep 30
+Write-Host "  Opening any moment. Please stay put - on a slower machine, or if"
+Write-Host "  the run itself started late, this can take a little longer still."
 
 # -- Find the specific run, not just the workflow list -------------------------
 # A run only gets a numeric ID once GitHub actually starts it - there is no way

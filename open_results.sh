@@ -50,6 +50,8 @@ sleep 60 && echo "  Opening in 120 seconds..."
 sleep 60 && echo "  Opening in 60 seconds..."
 sleep 30 && echo "  Opening in 30 seconds..."
 sleep 30
+echo "  Opening any moment. Please stay put — on a slower machine, or if"
+echo "  the run itself started late, this can take a little longer still."
 
 # ── Find the specific run, not just the workflow list ────────────────────────
 # A run only gets a numeric ID once GitHub actually starts it — there is no way
