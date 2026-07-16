@@ -77,7 +77,7 @@ Steps 1–3 confirmed the system is running and the <a id="ref-simulation-engine
 
 ## Trigger the full retraining loop
 
-The system can detect when the data starts behaving differently (called <a id="ref-drift"></a>[_drift_](#glossary-drift)) and retrain itself automatically. To see this in action, run one of the following commands depending on your OS — it intentionally generates abnormal sensor readings (e.g. temperature spikes, high toolwear, etc.), checks for drift right in this terminal, then opens the drift report and GitHub Actions page in your browser automatically:
+The system can detect when the data starts behaving differently (called <a id="ref-drift"></a>[_drift_](#glossary-drift)) and retrain itself automatically. To see this in action, run one of the following commands depending on your OS — it intentionally generates abnormal sensor readings (e.g. temperature spikes, high toolwear, etc.), checks for drift right in this terminal, then opens the drift report and the <a id="ref-github-actions"></a>[GitHub Actions](#glossary-github-actions) run in your browser automatically:
 
 **Mac / Linux**
 
@@ -98,13 +98,15 @@ docker compose run --rm simulator --mode sudden-spike --n-readings 1000 --demo; 
 1. 1,000 abnormal readings are generated and sent to the prediction API
 2. Drift detection runs immediately and prints a report in this terminal — you will see which sensor features shifted and whether the threshold was crossed
 3. The <a id="ref-drift-report"></a>[drift report](#glossary-drift-report) opens in your browser (`reports/drift_report.html`)
-4. The <a id="ref-github-actions"></a>[GitHub Actions](#glossary-github-actions) page opens — if drift was detected, a retraining workflow appears there within a few minutes and runs automatically
+4. If drift was detected, the retraining run opens directly in your browser within a few minutes (see [While GitHub Actions is running](#while-github-actions-is-running) below for what you're looking at)
 
 ---
 
 ## While GitHub Actions is running
 
 You don't need to do anything — it's safe to just let it run.
+
+**Where to actually watch it:** `open_results.sh` / `open_results.ps1` open the specific run directly when they can. If instead you land on a *list* of runs — because you navigated to GitHub Actions yourself, or the script fell back to the list — the list alone won't show you anything happening. Click into the top row (the most recent run) to open it; that's where each step runs live, one by one.
 
 **What it's doing:** Training a new version of the prediction model on the full sensor dataset, now including the readings you just generated.
 

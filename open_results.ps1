@@ -5,7 +5,8 @@
 #   .\open_results.ps1
 
 $Report  = "reports\drift_report.html"
-$Actions = "https://github.com/Preempt-Analytics-Demo/predictive-maintenance-demo/actions"
+$Repo    = "Preempt-Analytics-Demo/predictive-maintenance-demo"
+$WorkflowRuns = "https://github.com/$Repo/actions/workflows/retrain.yml"   # this one workflow's runs, not every workflow in the repo
 
 # -- Open the drift report after a short delay --------------------------------
 # The HTML report is written the moment the simulator exits - it is ready now.
@@ -40,6 +41,29 @@ Start-Sleep 60; Write-Host "  Opening in 120 seconds..."
 Start-Sleep 60; Write-Host "  Opening in 60 seconds..."
 Start-Sleep 30; Write-Host "  Opening in 30 seconds..."
 Start-Sleep 30
-Write-Host "  Opening GitHub Actions: $Actions"
-Start-Process $Actions
+
+# -- Find the specific run, not just the workflow list -------------------------
+# A run only gets a numeric ID once GitHub actually starts it - there is no way
+# to know that ID ahead of time, but by now the run has had ~4 minutes to start,
+# so asking the (public, unauthenticated) GitHub API for the most recent run of
+# this one workflow reliably finds it.
+try {
+    $Response = Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/actions/workflows/retrain.yml/runs?per_page=1" -ErrorAction Stop
+    if ($Response.workflow_runs.Count -gt 0) {
+        $RunUrl = "https://github.com/$Repo/actions/runs/$($Response.workflow_runs[0].id)"
+        Write-Host "  Opening the retraining run directly: $RunUrl"
+        Start-Process $RunUrl
+    } else {
+        Write-Host "  No run found yet - opening the retraining workflow's run list instead."
+        Write-Host "  Click the top row (the most recent run) to watch it live."
+        Start-Process $WorkflowRuns
+    }
+} catch {
+    # API call failed - fall back to the workflow's own run list. Still far more
+    # targeted than the repo's general Actions tab, which mixes in the unrelated
+    # docker-publish workflow.
+    Write-Host "  Couldn't fetch the specific run - opening the retraining workflow's run list instead."
+    Write-Host "  Click the top row (the most recent run) to watch it live."
+    Start-Process $WorkflowRuns
+}
 Write-Host ""
