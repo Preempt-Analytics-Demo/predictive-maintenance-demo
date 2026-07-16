@@ -8,6 +8,23 @@ $Report  = "reports\drift_report.html"
 $Repo    = "Preempt-Analytics-Demo/predictive-maintenance-demo"
 $WorkflowRuns = "https://github.com/$Repo/actions/workflows/retrain.yml"   # this one workflow's runs, not every workflow in the repo
 
+function Get-LatestRunId {
+    try {
+        $Response = Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/actions/workflows/retrain.yml/runs?per_page=1" -ErrorAction Stop
+        if ($Response.workflow_runs.Count -gt 0) { return $Response.workflow_runs[0].id }
+    } catch { }
+    return $null
+}
+
+# -- Baseline: remember the run that exists before this trigger fires ---------
+# Captured as the very first thing the script does, before the drift-report
+# section below can spend any time - so a fast retraining pipeline can never
+# race past this check. Comparing against this baseline later is how we tell a
+# genuinely NEW run apart from re-opening whatever ran last time, which is
+# what happened without it: the script grabbed "the most recent run" before
+# the new one existed yet, and opened an old, already-finished run instead.
+$BaselineRunId = Get-LatestRunId
+
 # -- Open the drift report after a short delay --------------------------------
 # The HTML report is written the moment the simulator exits - it is ready now.
 # An 8-second pause gives you time to read the terminal output (which shows the
@@ -26,49 +43,63 @@ if (Test-Path $Report) {
     Write-Host "  No drift report found at $Report - run the simulator first."
 }
 
-# -- Open GitHub Actions after a delay -----------------------------------------
-# Measured in practice, not estimated: the monitor's own check interval, the
-# export + DagsHub upload, and GitHub Actions picking up the push each add
-# real time - the workflow is reliably visible and running by ~4 minutes, not
-# the 90 s this used to wait. Opening earlier just shows an empty Actions page
-# with no run yet, which reads as "did this actually work?" to a first-time
-# user - so the wait itself is explained up front, in plain terms, before the
-# countdown starts (Redish: say what's happening and why before the numbers).
+# -- Watch for the new retraining run -------------------------------------------
+# A fixed wait can't work here: the slow part is uploading the training data to
+# DagsHub, and that upload grows with every simulated reading ever generated in
+# this environment - a few minutes early in a demo's life, longer the more the
+# demo has been used since. Rather than guess a duration, poll the (public,
+# unauthenticated) GitHub API every 20s for a run newer than the baseline
+# above, and open it the instant it exists - accurate no matter how long the
+# real wait turns out to be.
 Write-Host ""
-Write-Host "  Please be patient - retraining takes a little while to fire."
-Write-Host "  How long depends on your machine's speed, not on anything going wrong."
-Write-Host "  GitHub Actions will open as soon as the run is ready to watch."
-Write-Host ""
-Write-Host "  Opening in 240 seconds..."
-Start-Sleep 60; Write-Host "  Opening in 180 seconds..."
-Start-Sleep 60; Write-Host "  Opening in 120 seconds..."
-Start-Sleep 60; Write-Host "  Opening in 60 seconds..."
-Start-Sleep 30; Write-Host "  Opening in 30 seconds..."
-Start-Sleep 30
-Write-Host "  Opening any moment. Please stay put - on a slower machine, or if"
-Write-Host "  the run itself started late, this can take a little longer still."
+Write-Host "  Watching GitHub for the new retraining run - this can take anywhere from"
+Write-Host "  about a minute to several minutes. It depends on how much training data"
+Write-Host "  has to upload, not on anything going wrong. You'll be taken there the"
+Write-Host "  moment it's ready; no need to do anything."
 
-# -- Find the specific run, not just the workflow list -------------------------
-# A run only gets a numeric ID once GitHub actually starts it - there is no way
-# to know that ID ahead of time, but by now the run has had ~4 minutes to start,
-# so asking the (public, unauthenticated) GitHub API for the most recent run of
-# this one workflow reliably finds it.
-try {
-    $Response = Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/actions/workflows/retrain.yml/runs?per_page=1" -ErrorAction Stop
-    if ($Response.workflow_runs.Count -gt 0) {
-        $RunUrl = "https://github.com/$Repo/actions/runs/$($Response.workflow_runs[0].id)"
-        Write-Host "  Opening the retraining run directly: $RunUrl"
-        Start-Process $RunUrl
-    } else {
-        Write-Host "  No run found yet - opening the retraining workflow's run list instead."
-        Write-Host "  Click the top row (the most recent run) to watch it live."
-        Start-Process $WorkflowRuns
+$PollInterval = 20
+$MaxWait = 600   # 10-minute ceiling - generous, but bounded so this can't hang forever
+$Elapsed = 0
+$NewRunId = $null
+
+while ($Elapsed -lt $MaxWait) {
+    Start-Sleep $PollInterval
+    $Elapsed += $PollInterval
+
+    $CurrentRunId = Get-LatestRunId
+    if ($CurrentRunId -and $CurrentRunId -ne $BaselineRunId) {
+        $NewRunId = $CurrentRunId
+        break
     }
-} catch {
-    # API call failed - fall back to the workflow's own run list. Still far more
-    # targeted than the repo's general Actions tab, which mixes in the unrelated
-    # docker-publish workflow.
-    Write-Host "  Couldn't fetch the specific run - opening the retraining workflow's run list instead."
+
+    # Heartbeat every ~60s so a long wait doesn't look like the terminal froze.
+    if ($Elapsed % 60 -eq 0) {
+        Write-Host "  Still watching... (${Elapsed}s so far - still normal)"
+    }
+}
+
+if ($NewRunId) {
+    # A run's summary page still requires clicking into a job to see anything
+    # live - html_url on the job itself is that exact click already followed,
+    # landing on the same run+job URL a person would land on by hand.
+    try {
+        $Jobs = Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/actions/runs/$NewRunId/jobs" -ErrorAction Stop
+        $JobUrl = $Jobs.jobs[0].html_url
+    } catch { $JobUrl = $null }
+
+    if ($JobUrl) {
+        Write-Host "  Opening the retraining job live: $JobUrl"
+        Start-Process $JobUrl
+    } else {
+        $RunUrl = "https://github.com/$Repo/actions/runs/$NewRunId"
+        Write-Host "  Opening the retraining run: $RunUrl"
+        Start-Process $RunUrl
+    }
+} else {
+    # No new run within MaxWait - fall back to the workflow's own run list.
+    # Still far more targeted than the repo's general Actions tab, which mixes
+    # in the unrelated docker-publish workflow.
+    Write-Host "  No new run appeared within ${MaxWait}s - opening the retraining workflow's run list instead."
     Write-Host "  Click the top row (the most recent run) to watch it live."
     Start-Process $WorkflowRuns
 }
