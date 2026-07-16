@@ -42,49 +42,56 @@ on:
 
 jobs:
 
-  # Runs first, before the actual retrain job, so a run that's too soon after
-  # the last one is skipped without spending any CI minutes on checkout, pip
+  # Runs first, before the actual retrain job, so a run past the hourly
+  # allowance is skipped without spending any CI minutes on checkout, pip
   # install, or training. This is a workflow-level guard, not just a courtesy
-  # message: unlike export_simulation_to_parquet.py's own cooldown check, this
-  # one still applies even if retrain.trigger was pushed directly (e.g. with
-  # the deploy key) rather than through that script — so it protects the
-  # shared CI/DagsHub resources regardless of how the push happened.
-  check-cooldown:
+  # message: unlike export_simulation_to_parquet.py's own check, this one
+  # still applies even if retrain.trigger was pushed directly (e.g. with the
+  # deploy key) rather than through that script — so it protects the shared
+  # CI/DagsHub resources regardless of how the push happened.
+  check-rate-limit:
     runs-on: ubuntu-latest
     permissions:
       actions: read
     outputs:
       proceed: ${{ steps.check.outputs.proceed }}
     steps:
-      - name: Check time since the last retrain run
+      - name: Count retrain runs in the last hour
         id: check
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           # Fails OPEN by design: DECISION only ever flips to "false" once the
-          # previous run is positively confirmed to be too recent. Any missing
-          # data, parse failure, or API hiccup along the way leaves DECISION at
-          # its default of "true", so a broken check can never silently block a
-          # real retrain — a stricter fail-closed version would trade "bots
-          # can flood the pipeline" for "one bad API response breaks retraining
-          # for everyone," which is worse.
+          # count is positively confirmed to already be at the limit. Any
+          # missing data, parse failure, or API hiccup along the way leaves
+          # DECISION at its default of "true", so a broken check can never
+          # silently block a real retrain — a stricter fail-closed version
+          # would trade "bots can flood the pipeline" for "one bad API
+          # response breaks retraining for everyone," which is worse.
           DECISION="true"
+          WINDOW=3600     # 1 hour — keep in sync with RETRAIN_WINDOW_SECONDS in export_simulation_to_parquet.py
+          MAX_RUNS=10     # keep in sync with MAX_RETRAINS_PER_HOUR in export_simulation_to_parquet.py
 
-          PREV_TIME=$(curl -s -H "Authorization: Bearer $GH_TOKEN" \
-            "https://api.github.com/repos/${{ github.repository }}/actions/workflows/retrain.yml/runs?per_page=5" \
-            | jq -r "[.workflow_runs[] | select(.id != ${{ github.run_id }})][0].created_at // empty" 2>/dev/null || echo "")
+          RUNS_JSON=$(curl -s -H "Authorization: Bearer $GH_TOKEN" \
+            "https://api.github.com/repos/${{ github.repository }}/actions/workflows/retrain.yml/runs?per_page=30" \
+            2>/dev/null || echo "")
 
-          if [ -n "$PREV_TIME" ]; then
-            PREV_EPOCH=$(date -d "$PREV_TIME" +%s 2>/dev/null || echo "")
-            if [ -n "$PREV_EPOCH" ]; then
-              NOW_EPOCH=$(date -u +%s)
-              ELAPSED=$((NOW_EPOCH - PREV_EPOCH))
-              COOLDOWN=3600   # 1 hour — keep in sync with RETRAIN_COOLDOWN_SECONDS in export_simulation_to_parquet.py
-              if [ "$ELAPSED" -lt "$COOLDOWN" ]; then
+          if [ -n "$RUNS_JSON" ]; then
+            NOW_EPOCH=$(date -u +%s)
+            COUNT=$(echo "$RUNS_JSON" | jq -r --argjson now "$NOW_EPOCH" --argjson window "$WINDOW" --argjson current "${{ github.run_id }}" '
+              [.workflow_runs[]
+               | select(.id != $current)
+               | select((.created_at | strptime("%Y-%m-%dT%H:%M:%SZ") | mktime) >= ($now - $window))
+              ] | length
+            ' 2>/dev/null || echo "")
+
+            if [ -n "$COUNT" ]; then
+              echo "Retrain runs in the last hour (excluding this one): $COUNT"
+              if [ "$COUNT" -ge "$MAX_RUNS" ]; then
                 DECISION="false"
-                echo "Last run started ${ELAPSED}s ago (< ${COOLDOWN}s cooldown) — skipping this run."
+                echo "Already at the ${MAX_RUNS}-per-hour limit — skipping this run."
               else
-                echo "Last run started ${ELAPSED}s ago — proceeding."
+                echo "Under the ${MAX_RUNS}-per-hour limit — proceeding."
               fi
             fi
           fi
@@ -92,11 +99,11 @@ jobs:
           echo "proceed=$DECISION" >> "$GITHUB_OUTPUT"
 
   retrain:
-    needs: check-cooldown
+    needs: check-rate-limit
     # != 'false' rather than == 'true': an unset/missing output from a step
     # that somehow still failed despite the guards above also defaults to
     # proceeding, matching the fail-open design one level higher up too.
-    if: needs.check-cooldown.outputs.proceed != 'false'
+    if: needs.check-rate-limit.outputs.proceed != 'false'
     runs-on: ubuntu-latest
 
     steps:

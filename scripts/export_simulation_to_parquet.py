@@ -140,11 +140,12 @@ import sqlite3
 import subprocess
 import sys
 import tempfile
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import click
 import pandas as pd
+import requests  # already a transitive dependency of mlflow/dvc — no new package needed
 
 # ── Repository roots ──────────────────────────────────────────────────────────
 # This script lives in scripts/. Data and DB live at the project root.
@@ -168,14 +169,17 @@ DEFAULT_OUTPUT = REPO_ROOT / "data" / "ai4i2020.parquet"  # Parquet replaces the
 BASELINE_ROW_COUNT = 10_000
 MAX_SIMULATED_ROWS = 10_000
 
-# ── Retrain cooldown ───────────────────────────────────────────────────────────
-# retrain.trigger is the one file every trigger path shares (monitor.py,
-# --export-on-drift, manual runs), so gating it here throttles all of them at
-# once. This is a courtesy for well-behaved callers only — it cannot stop
-# someone using the deploy key directly to push a retrain.trigger change,
-# bypassing this script entirely. retrain.yml's own workflow-level check is
-# what actually protects against that; keep both cooldown values in sync.
-RETRAIN_COOLDOWN_SECONDS = 3600  # 1 hour
+# ── Retrain rate limit ─────────────────────────────────────────────────────────
+# A single global allowance, shared by every demo user and the automated
+# monitor alike — this is a courtesy for well-behaved callers only, checked
+# here before they even try to push. It cannot stop someone using the deploy
+# key directly to push a retrain.trigger change, bypassing this script
+# entirely; retrain.yml's own workflow-level check is what actually protects
+# against that (see .github/workflows/retrain.yml) — keep both constants below
+# in sync with the ones defined there.
+RETRAIN_WINDOW_SECONDS = 3600   # the rolling window the limit applies over (1 hour)
+MAX_RETRAINS_PER_HOUR  = 10     # how many retrainings are allowed inside that window
+GITHUB_REPO = "Preempt-Analytics-Demo/predictive-maintenance-demo"
 
 # ── Failure type derivation thresholds ───────────────────────────────────────
 # From Matzka (2020) — the same rules used to generate the original labels.
@@ -492,21 +496,40 @@ def _make_ssh_env() -> dict[str, str] | None:
 # check=True raises CalledProcessError on a non-zero exit code, which stops
 # the sequence and prints the failing command's stderr so the cause is clear.
 
-def _seconds_since_last_retrain(retrain_trigger: Path) -> float | None:
-    """Return seconds since retrain.trigger last fired, or None if unknown.
+def _recent_retrain_count(window_seconds: int = RETRAIN_WINDOW_SECONDS) -> int | None:
+    """Count retrain.yml runs that started within the last `window_seconds`.
 
-    None covers both "never triggered before" and "the existing file doesn't
-    parse" — both cases fail OPEN (allow the retrain) rather than silently
-    blocking one forever over a missing file or an unexpected format.
+    Queries the (public, unauthenticated) GitHub API rather than any local
+    file — retrain.trigger only ever holds the SINGLE most recent timestamp,
+    which can't tell "how many happened in the last hour" on its own, and a
+    local counter file would need its own syncing logic across every demo
+    user's separate clone. The workflow's own run history is already the one
+    place a count like this is authoritative and shared by everyone.
+
+    Returns None if the count can't be determined (network issue, unexpected
+    response, etc.) — callers should fail OPEN on None rather than blocking.
     """
-    if not retrain_trigger.exists():
-        return None
     try:
-        ts_str  = retrain_trigger.read_text().strip().split(": ", 1)[1]
-        last_ts = datetime.strptime(ts_str, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
-        return (datetime.now(timezone.utc) - last_ts).total_seconds()
-    except (IndexError, ValueError):
+        resp = requests.get(
+            f"https://api.github.com/repos/{GITHUB_REPO}/actions/workflows/retrain.yml/runs",
+            params={"per_page": 30},
+            timeout=5,
+        )
+        resp.raise_for_status()
+        runs = resp.json().get("workflow_runs", [])
+    except (requests.RequestException, ValueError):
         return None
+
+    cutoff = datetime.now(timezone.utc) - timedelta(seconds=window_seconds)
+    count = 0
+    for run in runs:
+        try:
+            created = datetime.strptime(run["created_at"], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+        except (KeyError, ValueError):
+            continue
+        if created >= cutoff:
+            count += 1
+    return count
 
 
 def _push_to_remote(
@@ -524,8 +547,8 @@ def _push_to_remote(
         data_path:       Path to the Parquet file that was just written.
         n_rows:          Number of rows the commit message should mention.
         trigger_retrain: True → update retrain.trigger and fire GitHub Actions,
-                         unless RETRAIN_COOLDOWN_SECONDS hasn't elapsed yet —
-                         see _seconds_since_last_retrain().
+                         unless MAX_RETRAINS_PER_HOUR has already been reached —
+                         see _recent_retrain_count().
                          False → push data only, no workflow triggered.
         verb:            "add" for a normal export, "prune" when n_rows counts
                          rows removed instead of added — only changes wording.
@@ -534,15 +557,20 @@ def _push_to_remote(
     retrain_trigger = REPO_ROOT / "retrain.trigger"             # project-root sentinel file
 
     if trigger_retrain:
-        elapsed = _seconds_since_last_retrain(retrain_trigger)
-        if elapsed is not None and elapsed < RETRAIN_COOLDOWN_SECONDS:
-            wait_min = int((RETRAIN_COOLDOWN_SECONDS - elapsed) // 60) + 1
+        count = _recent_retrain_count()
+        if count is not None and count >= MAX_RETRAINS_PER_HOUR:
             click.echo(
-                f"\n  Retraining already ran less than an hour ago — skipping to avoid "
-                f"flooding the pipeline. Data will still upload; try triggering a retrain "
-                f"again in about {wait_min} minute(s)."
+                f"\n  You've used all {MAX_RETRAINS_PER_HOUR} retrainings allowed this "
+                f"hour — skipping this one to avoid flooding the pipeline. Data will "
+                f"still upload; retrainings free up again on a rolling basis as this "
+                f"hour's earlier runs age past the 1-hour mark."
             )
             trigger_retrain = False   # falls through to the data-only branch below
+        elif count is not None and count >= MAX_RETRAINS_PER_HOUR // 2:
+            click.echo(
+                f"\n  Heads up: this will be retraining {count + 1} of "
+                f"{MAX_RETRAINS_PER_HOUR} allowed this hour."
+            )
 
     if trigger_retrain:
         # Write a UTC timestamp so git log shows exactly when each retrain was triggered.

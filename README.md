@@ -118,6 +118,8 @@ You don't need to do anything — it's safe to just let it run.
 
 **Does the new model go live automatically?** Only if it's measurably more accurate than the one currently in use. The workflow checks this before switching anything, so a worse model can never take over by accident.
 
+**Is there a limit to how often this can run?** Yes — up to 10 retrainings per hour, shared by everyone using this demo at once (not 10 per person). It's there to stop the shared pipeline from being flooded. If the limit's been reached, your sensor data still uploads normally; only the retraining itself waits until an earlier run in that hour ages out. Your terminal tells you when you're getting close and when you've hit it.
+
 ---
 
 ## Explore the prediction API
