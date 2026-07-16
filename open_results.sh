@@ -15,8 +15,13 @@ _open() { case "$(uname -s)" in Darwin) open "$1" ;; Linux) xdg-open "$1" 2>/dev
 # "id" is deliberately matched with its quotes and colon, both here and further
 # down — the same API responses also contain workflow_id, check_suite_id, etc.,
 # which a looser match would grab by mistake.
+#
+# --max-time caps how long curl itself can sit waiting: without it, a request
+# that gets silently dropped by a firewall or proxy (rather than actively
+# refused) can hang far longer than any timeout this script tries to enforce
+# around it, since a hung curl call isn't something a shell timer can see.
 _latest_run_id() {
-    curl -s "https://api.github.com/repos/$REPO/actions/workflows/retrain.yml/runs?per_page=1" 2>/dev/null \
+    curl -s --max-time 10 "https://api.github.com/repos/$REPO/actions/workflows/retrain.yml/runs?per_page=1" 2>/dev/null \
         | grep -o '"id": [0-9]*' | head -1 | grep -o '[0-9]*'
 }
 
@@ -64,12 +69,18 @@ echo "  moment it's ready; no need to do anything."
 
 POLL_INTERVAL=20
 MAX_WAIT=600   # 10-minute ceiling — generous, but bounded so this can't hang forever
-ELAPSED=0
+START_EPOCH=$(date +%s)
+NEXT_HEARTBEAT=60
 NEW_RUN_ID=""
 
+# Measures real wall-clock time (now minus START_EPOCH), not sleep time added
+# up — a counter that only counted POLL_INTERVAL sleeps would understate the
+# true wait whenever _latest_run_id itself takes a while (slow network, a
+# retry, anything short of the --max-time cutoff above), so MAX_WAIT would
+# stop being a real ceiling exactly when it matters most.
+ELAPSED=0
 while [ "$ELAPSED" -lt "$MAX_WAIT" ]; do
     sleep "$POLL_INTERVAL"
-    ELAPSED=$((ELAPSED + POLL_INTERVAL))
 
     CURRENT_RUN_ID=$(_latest_run_id)
     if [ -n "$CURRENT_RUN_ID" ] && [ "$CURRENT_RUN_ID" != "$BASELINE_RUN_ID" ]; then
@@ -77,9 +88,12 @@ while [ "$ELAPSED" -lt "$MAX_WAIT" ]; do
         break
     fi
 
+    ELAPSED=$(( $(date +%s) - START_EPOCH ))
+
     # Heartbeat every ~60s so a long wait doesn't look like the terminal froze.
-    if [ $((ELAPSED % 60)) -eq 0 ]; then
+    if [ "$ELAPSED" -ge "$NEXT_HEARTBEAT" ]; then
         echo "  Still watching... (${ELAPSED}s so far — still normal)"
+        NEXT_HEARTBEAT=$((NEXT_HEARTBEAT + 60))
     fi
 done
 
@@ -87,7 +101,7 @@ if [ -n "$NEW_RUN_ID" ]; then
     # A run's summary page still requires clicking into a job to see anything
     # live — html_url on the job itself is that exact click already followed,
     # landing on the same run+job URL a person would land on by hand.
-    JOB_URL=$(curl -s "https://api.github.com/repos/$REPO/actions/runs/$NEW_RUN_ID/jobs" 2>/dev/null \
+    JOB_URL=$(curl -s --max-time 10 "https://api.github.com/repos/$REPO/actions/runs/$NEW_RUN_ID/jobs" 2>/dev/null \
         | grep -o '"html_url": "[^"]*"' | head -1 | cut -d'"' -f4)
 
     if [ -n "$JOB_URL" ]; then

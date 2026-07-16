@@ -72,7 +72,7 @@ jobs:
           WINDOW=3600     # 1 hour — keep in sync with RETRAIN_WINDOW_SECONDS in export_simulation_to_parquet.py
           MAX_RUNS=10     # keep in sync with MAX_RETRAINS_PER_HOUR in export_simulation_to_parquet.py
 
-          RUNS_JSON=$(curl -s -H "Authorization: Bearer $GH_TOKEN" \
+          RUNS_JSON=$(curl -s --max-time 10 -H "Authorization: Bearer $GH_TOKEN" \
             "https://api.github.com/repos/${{ github.repository }}/actions/workflows/retrain.yml/runs?per_page=30" \
             2>/dev/null || echo "")
 

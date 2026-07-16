@@ -8,9 +8,15 @@ $Report  = "reports\drift_report.html"
 $Repo    = "Preempt-Analytics-Demo/predictive-maintenance-demo"
 $WorkflowRuns = "https://github.com/$Repo/actions/workflows/retrain.yml"   # this one workflow's runs, not every workflow in the repo
 
+# -TimeoutSec caps how long the request itself can sit waiting: without it, a
+# request that gets silently dropped by a firewall, proxy, or VPN (rather than
+# actively refused) can hang far longer than any timeout this script tries to
+# enforce around it - Windows' own TCP retry behavior alone can stretch that
+# to several minutes on a locked-down network, with nothing in PowerShell to
+# cut it off on its own.
 function Get-LatestRunId {
     try {
-        $Response = Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/actions/workflows/retrain.yml/runs?per_page=1" -ErrorAction Stop
+        $Response = Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/actions/workflows/retrain.yml/runs?per_page=1" -TimeoutSec 10 -ErrorAction Stop
         if ($Response.workflow_runs.Count -gt 0) { return $Response.workflow_runs[0].id }
     } catch { }
     return $null
@@ -59,12 +65,18 @@ Write-Host "  moment it's ready; no need to do anything."
 
 $PollInterval = 20
 $MaxWait = 600   # 10-minute ceiling - generous, but bounded so this can't hang forever
-$Elapsed = 0
+$StartTime = Get-Date
+$NextHeartbeat = 60
 $NewRunId = $null
 
+# Measures real wall-clock time (now minus StartTime), not sleep time added up
+# - a counter that only counted PollInterval sleeps would understate the true
+# wait whenever Get-LatestRunId itself takes a while (slow network, a retry,
+# anything short of the -TimeoutSec cutoff above), so MaxWait would stop being
+# a real ceiling exactly when it matters most.
+$Elapsed = 0
 while ($Elapsed -lt $MaxWait) {
     Start-Sleep $PollInterval
-    $Elapsed += $PollInterval
 
     $CurrentRunId = Get-LatestRunId
     if ($CurrentRunId -and $CurrentRunId -ne $BaselineRunId) {
@@ -72,9 +84,12 @@ while ($Elapsed -lt $MaxWait) {
         break
     }
 
+    $Elapsed = [int]((Get-Date) - $StartTime).TotalSeconds
+
     # Heartbeat every ~60s so a long wait doesn't look like the terminal froze.
-    if ($Elapsed % 60 -eq 0) {
+    if ($Elapsed -ge $NextHeartbeat) {
         Write-Host "  Still watching... (${Elapsed}s so far - still normal)"
+        $NextHeartbeat += 60
     }
 }
 
@@ -83,7 +98,7 @@ if ($NewRunId) {
     # live - html_url on the job itself is that exact click already followed,
     # landing on the same run+job URL a person would land on by hand.
     try {
-        $Jobs = Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/actions/runs/$NewRunId/jobs" -ErrorAction Stop
+        $Jobs = Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/actions/runs/$NewRunId/jobs" -TimeoutSec 10 -ErrorAction Stop
         $JobUrl = $Jobs.jobs[0].html_url
     } catch { $JobUrl = $null }
 
