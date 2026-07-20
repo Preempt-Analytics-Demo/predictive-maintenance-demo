@@ -589,12 +589,31 @@ def _push_to_remote(
     git_env = _make_ssh_env()
     run_env = {**os.environ, **git_env} if git_env else None  # None = inherit as-is
 
+    # ── Remote URL fix (Docker only) ──────────────────────────────────────────
+    # GIT_SSH_COMMAND above only helps if origin is already an SSH URL. A fresh
+    # `git clone https://github.com/...` — the README's own Step 1, what every
+    # new user actually runs — sets origin to HTTPS instead, which ignores
+    # GIT_SSH_COMMAND entirely: git push then tries HTTPS with no credential
+    # helper configured and fails immediately ("could not read Username"),
+    # every ~30s, forever, with the failure never surfacing outside this
+    # container's own logs. GIT_REMOTE_URL (.env.demo) already holds the
+    # correct SSH form for exactly this reason; it just wasn't wired up
+    # anywhere. Only touch origin in the Docker/deploy-key context — on a
+    # developer's host, origin is whatever they configured themselves and
+    # should never be silently rewritten.
+    remote_fix = []
+    git_remote_url = os.environ.get("GIT_REMOTE_URL")
+    if git_env and git_remote_url:
+        remote_fix = [
+            (["git", "remote", "set-url", "origin", git_remote_url], "Pointing origin at SSH remote", False)
+        ]
+
     # Each step tuple: (command, label, echo_stdout).
     # echo_stdout=False for dvc add: DVC prints "To track the changes with git,
     # run: git add ..." even on success — advisory noise that contradicts what
     # the next step is about to do automatically. Errors still surface via stderr
     # on returncode != 0, so nothing is hidden when something actually goes wrong.
-    steps = [
+    steps = remote_fix + [
         (["dvc", "add",  str(data_path)],               "Updating .dvc pointer",         False),
         (["dvc", "push", str(data_path)],               "Uploading Parquet to DagsHub",  True),
         (["git", "add"] + git_add_targets,              "Staging files",                  False),
