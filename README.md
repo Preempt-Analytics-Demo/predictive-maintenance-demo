@@ -32,12 +32,11 @@ Install it and make sure it is running (you should see the Docker whale icon in 
 
 ## Setup — three commands
 
-Open a your OS specific <a id="ref-cli"></a>[command line interface](#glossary-cli) and run these three commands in order:
+Open your OS's <a id="ref-cli"></a>[command line interface](#glossary-cli) and run these three commands in order:
 
-> <b>On Windows:</b> Powershell / Terminal / CMD
-
-> <b>On Mac:</b>
-> Terminal
+> <b>On Windows:</b> PowerShell, Terminal, or CMD
+>
+> <b>On Mac:</b> Terminal
 
 **1. Download the project**
 
@@ -63,7 +62,7 @@ docker compose run --rm simulator --mode normal --n-readings 500 --pause
 - Step 2 started two background services in detached mode — they keep running after you close your terminal. To confirm both are up: `docker compose ps`
 - Step 3 confirmed they are connected — 500 sensor readings were routed through the API, predictions were made, and results were stored
 
-If you saw a stream of readings ending with `Done — 500 readings stored`, the <a id="ref-drift-detection"></a>[drift detection](#glossary-drift-detection) running and ending with `PASS — distribution looks stable. No retraining triggered.`, the system is working correctly.
+If you saw a stream of readings ending with `Done — 500 readings stored`, followed by <a id="ref-drift-detection"></a>[drift detection](#glossary-drift-detection) output ending with `PASS — distribution looks stable. No retraining triggered.`, the system is working correctly.
 
 ---
 
@@ -71,7 +70,7 @@ If you saw a stream of readings ending with `Done — 500 readings stored`, the 
 
 Steps 1–3 confirmed the system is running and the <a id="ref-simulation-engine"></a>[simulation engine](#glossary-simulation-engine) is connected to the prediction API. Next, trigger the fully automated retraining loop: watch the model detect data shift, push new training data to the cloud, and retrain itself.
 
-![alt text](<images/Retraining Loop.png>)
+![Diagram of the automated retraining loop](<images/Retraining Loop.png>)
 
 ---
 
