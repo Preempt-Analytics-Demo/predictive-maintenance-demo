@@ -460,15 +460,19 @@ def _diagnose_failure(output: str) -> str | None:
 # this keeps working whether origin is the alias or plain git@github.com — no
 # more chasing whichever form `origin` happens to be in on a given machine.
 
-def _make_ssh_env() -> dict[str, str] | None:
-    """Return a GIT_SSH_COMMAND env dict that authenticates git with the deploy key.
+def _make_ssh_env() -> tuple[dict[str, str], str] | tuple[None, None]:
+    """Return a (GIT_SSH_COMMAND env dict, temp key file path) authenticating
+    git with the deploy key, or (None, None) on the host.
 
     Reads GIT_SSH_KEY_B64 from the environment. If absent (running on the host),
-    returns None so the host's own SSH config handles authentication as normal.
+    returns (None, None) so the host's own SSH config handles authentication as
+    normal. The key path is returned alongside the env dict — not just embedded
+    in it — so the caller can delete the temp file once the push is done; it is
+    not itself an environment variable git needs.
     """
     key_b64 = os.environ.get("GIT_SSH_KEY_B64")
     if not key_b64:
-        return None  # host environment — ~/.ssh/config handles authentication
+        return None, None  # host environment — ~/.ssh/config handles authentication
 
     # Decode the deploy key and write to a temp file; SSH refuses keys not 0600
     key_bytes = base64.b64decode(key_b64)
@@ -480,7 +484,7 @@ def _make_ssh_env() -> dict[str, str] | None:
     # -i supplies the credential; -o HostName pins the actual connect target to
     # GitHub's real host so any alias `origin` happens to use still resolves —
     # this command only ever pushes this project's own data to its own repo.
-    return {
+    env = {
         "GIT_SSH_COMMAND": (
             f"ssh -i {key_file.name}"
             f" -o HostName=github.com"        # resolve regardless of origin's alias
@@ -488,6 +492,7 @@ def _make_ssh_env() -> dict[str, str] | None:
             f" -o UserKnownHostsFile=/dev/null"  # suppress "unknown host" warnings
         )
     }
+    return env, key_file.name
 
 
 # ── Retrain trigger ───────────────────────────────────────────────────────────
@@ -586,7 +591,7 @@ def _push_to_remote(
     # On the host, git's SSH config already has the 'github-preempt' alias.
     # Inside Docker that alias is missing — _make_ssh_env() injects a temp
     # SSH config that maps it to github.com so git push resolves correctly.
-    git_env = _make_ssh_env()
+    git_env, ssh_key_file = _make_ssh_env()
     run_env = {**os.environ, **git_env} if git_env else None  # None = inherit as-is
 
     # ── Remote URL fix (Docker only) ──────────────────────────────────────────
@@ -621,20 +626,24 @@ def _push_to_remote(
         (["git", "push"],                               "Pushing to GitHub",              True),
     ]
 
-    for cmd, label, echo_stdout in steps:
-        click.echo(f"\n  → {label}...")
-        result = subprocess.run(cmd, capture_output=True, text=True, env=run_env)  # env resolves SSH alias
-        if result.returncode != 0:
-            output    = result.stderr or result.stdout
-            diagnosis = _diagnose_failure(output)
-            click.echo(f"\nERROR: `{' '.join(cmd)}` failed.", err=True)
-            if diagnosis:
-                click.echo(f"  {diagnosis}", err=True)
-            click.echo("\n  Technical detail:", err=True)
-            click.echo(f"  {output}", err=True)
-            sys.exit(1)
-        if echo_stdout and result.stdout.strip():
-            click.echo(result.stdout.strip())
+    try:
+        for cmd, label, echo_stdout in steps:
+            click.echo(f"\n  → {label}...")
+            result = subprocess.run(cmd, capture_output=True, text=True, env=run_env)  # env resolves SSH alias
+            if result.returncode != 0:
+                output    = result.stderr or result.stdout
+                diagnosis = _diagnose_failure(output)
+                click.echo(f"\nERROR: `{' '.join(cmd)}` failed.", err=True)
+                if diagnosis:
+                    click.echo(f"  {diagnosis}", err=True)
+                click.echo("\n  Technical detail:", err=True)
+                click.echo(f"  {output}", err=True)
+                sys.exit(1)
+            if echo_stdout and result.stdout.strip():
+                click.echo(result.stdout.strip())
+    finally:
+        if ssh_key_file:
+            Path(ssh_key_file).unlink(missing_ok=True)   # always remove the temp key file
 
     if trigger_retrain:
         click.echo("\nGitHub Actions retrain workflow triggered.")
