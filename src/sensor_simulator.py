@@ -808,9 +808,9 @@ def main(
     # used elsewhere in this file.
     if demo:
         print()
-        print("═" * 60)
+        print("—" * 60)
         print("  Full retraining loop — what's about to happen")
-        print("═" * 60)
+        print("—" * 60)
         print()
         print("  1. 1,000 abnormal readings will be generated and sent to the")
         print("     prediction API.")
