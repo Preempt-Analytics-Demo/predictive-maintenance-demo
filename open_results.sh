@@ -68,6 +68,7 @@ echo ""
 echo "  The HTML report shows per-feature drift histograms and the overall verdict."
 echo "  Opening in your browser in 8 seconds..."
 if [ -t 1 ]; then
+    echo ""
     _spin 8 "Opening drift report" circle
 else
     sleep 2 && echo "  Opening in 6 seconds..."
@@ -95,6 +96,7 @@ echo "  Watching GitHub for the new retraining run — this can take anywhere fr
 echo "  about a minute to several minutes. It depends on how much training data"
 echo "  has to upload, not on anything going wrong. You'll be taken there the"
 echo "  moment it's ready; no need to do anything."
+echo ""
 
 POLL_INTERVAL=20
 MAX_WAIT=600   # 10-minute ceiling — generous, but bounded so this can't hang forever

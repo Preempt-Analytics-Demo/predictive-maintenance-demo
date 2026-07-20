@@ -75,6 +75,7 @@ Write-Host ""
 Write-Host "  The HTML report shows per-feature drift histograms and the overall verdict."
 Write-Host "  Opening in your browser in 8 seconds..."
 if (-not [Console]::IsOutputRedirected) {
+    Write-Host ""
     Show-Spinner -Seconds 8 -Label "Opening drift report" -Style circle
 } else {
     Start-Sleep 2; Write-Host "  Opening in 6 seconds..."
@@ -102,6 +103,7 @@ Write-Host "  Watching GitHub for the new retraining run - this can take anywher
 Write-Host "  about a minute to several minutes. It depends on how much training data"
 Write-Host "  has to upload, not on anything going wrong. You'll be taken there the"
 Write-Host "  moment it's ready; no need to do anything."
+Write-Host ""
 
 $PollInterval = 20
 $MaxWait = 600   # 10-minute ceiling - generous, but bounded so this can't hang forever
