@@ -794,6 +794,25 @@ def main(
         click.echo("Nothing to export. Run sensor_simulator.py to generate readings.")
         return
 
+    # ── Guard against a missing-but-tracked output file ───────────────────────
+    # A .dvc pointer is a small text file committed straight to git — present
+    # after any clone. The actual tracked Parquet is only fetched by `dvc
+    # pull`, which nothing in the setup flow runs automatically. Without this
+    # check, append-mode below sees output.exists() == False and silently
+    # starts a brand-new file containing only this run's rows — discarding
+    # the shared baseline and every prior simulated row, then pushing that
+    # data loss straight to the remote. This happened for real: commits
+    # 2aef5fe/ae0b9e9 replaced a 20,000-row dataset with 1,000 fresh rows.
+    dvc_pointer = Path(str(output) + ".dvc")
+    if append and dvc_pointer.exists() and not output.exists():
+        click.echo(f"\n  {output} is tracked by DVC but missing locally — running `dvc pull` first...")
+        pull_result = subprocess.run(["dvc", "pull", str(output)], capture_output=True, text=True)
+        if pull_result.returncode != 0 or not output.exists():
+            click.echo(f"\nERROR: `dvc pull {output}` failed — refusing to guess at the dataset's state.", err=True)
+            click.echo("  Overwriting it with only this run's rows would discard the shared history.", err=True)
+            click.echo(pull_result.stderr or pull_result.stdout, err=True)
+            sys.exit(1)
+
     # ── Determine starting UDI ─────────────────────────────────────────────────
     if append and output.exists():
         existing     = pd.read_parquet(output, columns=["UDI"])  # Parquet: load only the UDI column
