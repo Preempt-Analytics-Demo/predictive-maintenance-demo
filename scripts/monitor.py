@@ -207,9 +207,9 @@ def check_drift() -> None:
         _append_log(drift_detected=True, retrain_triggered=False)
         return
 
-    print("\n" + "═" * 60)
+    print("\n" + "—" * 60)
     print("  RETRAINING TRIGGERED SUCCESSFULLY")
-    print("═" * 60)
+    print("—" * 60)
     print()
     print("  The model is now retraining in the cloud.")
     print("  Watch it run live — open this link in your browser:")
@@ -217,7 +217,7 @@ def check_drift() -> None:
     print(f"  {ACTIONS_URL}")
     print()
     print("  See README → 'Trigger the full retraining loop' for what to expect.")
-    print("═" * 60)
+    print("—" * 60)
     _append_log(drift_detected=True, retrain_triggered=True)
 
 
@@ -249,9 +249,9 @@ if __name__ == "__main__":
     # view of the monitor — the goal is to answer "what is this, what should I
     # do next, and how will I know it worked?" before any drift check runs.
     print()
-    print("═" * 60)
+    print("—" * 60)
     print("  PREEMPT ANALYTICS — DRIFT MONITOR")
-    print("═" * 60)
+    print("—" * 60)
     print()
     print("  What this does")
     print("  ──────────────")
@@ -275,7 +275,7 @@ if __name__ == "__main__":
     print("    docker compose logs -f monitor")
     print()
     print(f"  Audit log: reports/monitor_log.jsonl")   # host path: <project-root>/reports/
-    print("═" * 60)
+    print("—" * 60)
 
     # ── Startup grace period ──────────────────────────────────────────────────
     # Give Frederick STARTUP_DELAY_S seconds to read the banner (and optionally
