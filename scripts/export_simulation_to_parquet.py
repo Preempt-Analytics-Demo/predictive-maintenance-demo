@@ -460,15 +460,19 @@ def _diagnose_failure(output: str) -> str | None:
 # this keeps working whether origin is the alias or plain git@github.com — no
 # more chasing whichever form `origin` happens to be in on a given machine.
 
-def _make_ssh_env() -> dict[str, str] | None:
-    """Return a GIT_SSH_COMMAND env dict that authenticates git with the deploy key.
+def _make_ssh_env() -> tuple[dict[str, str], str] | tuple[None, None]:
+    """Return a (GIT_SSH_COMMAND env dict, temp key file path) authenticating
+    git with the deploy key, or (None, None) on the host.
 
     Reads GIT_SSH_KEY_B64 from the environment. If absent (running on the host),
-    returns None so the host's own SSH config handles authentication as normal.
+    returns (None, None) so the host's own SSH config handles authentication as
+    normal. The key path is returned alongside the env dict — not just embedded
+    in it — so the caller can delete the temp file once the push is done; it is
+    not itself an environment variable git needs.
     """
     key_b64 = os.environ.get("GIT_SSH_KEY_B64")
     if not key_b64:
-        return None  # host environment — ~/.ssh/config handles authentication
+        return None, None  # host environment — ~/.ssh/config handles authentication
 
     # Decode the deploy key and write to a temp file; SSH refuses keys not 0600
     key_bytes = base64.b64decode(key_b64)
@@ -480,7 +484,7 @@ def _make_ssh_env() -> dict[str, str] | None:
     # -i supplies the credential; -o HostName pins the actual connect target to
     # GitHub's real host so any alias `origin` happens to use still resolves —
     # this command only ever pushes this project's own data to its own repo.
-    return {
+    env = {
         "GIT_SSH_COMMAND": (
             f"ssh -i {key_file.name}"
             f" -o HostName=github.com"        # resolve regardless of origin's alias
@@ -488,6 +492,7 @@ def _make_ssh_env() -> dict[str, str] | None:
             f" -o UserKnownHostsFile=/dev/null"  # suppress "unknown host" warnings
         )
     }
+    return env, key_file.name
 
 
 # ── Retrain trigger ───────────────────────────────────────────────────────────
@@ -586,15 +591,34 @@ def _push_to_remote(
     # On the host, git's SSH config already has the 'github-preempt' alias.
     # Inside Docker that alias is missing — _make_ssh_env() injects a temp
     # SSH config that maps it to github.com so git push resolves correctly.
-    git_env = _make_ssh_env()
+    git_env, ssh_key_file = _make_ssh_env()
     run_env = {**os.environ, **git_env} if git_env else None  # None = inherit as-is
+
+    # ── Remote URL fix (Docker only) ──────────────────────────────────────────
+    # GIT_SSH_COMMAND above only helps if origin is already an SSH URL. A fresh
+    # `git clone https://github.com/...` — the README's own Step 1, what every
+    # new user actually runs — sets origin to HTTPS instead, which ignores
+    # GIT_SSH_COMMAND entirely: git push then tries HTTPS with no credential
+    # helper configured and fails immediately ("could not read Username"),
+    # every ~30s, forever, with the failure never surfacing outside this
+    # container's own logs. GIT_REMOTE_URL (.env.demo) already holds the
+    # correct SSH form for exactly this reason; it just wasn't wired up
+    # anywhere. Only touch origin in the Docker/deploy-key context — on a
+    # developer's host, origin is whatever they configured themselves and
+    # should never be silently rewritten.
+    remote_fix = []
+    git_remote_url = os.environ.get("GIT_REMOTE_URL")
+    if git_env and git_remote_url:
+        remote_fix = [
+            (["git", "remote", "set-url", "origin", git_remote_url], "Pointing origin at SSH remote", False)
+        ]
 
     # Each step tuple: (command, label, echo_stdout).
     # echo_stdout=False for dvc add: DVC prints "To track the changes with git,
     # run: git add ..." even on success — advisory noise that contradicts what
     # the next step is about to do automatically. Errors still surface via stderr
     # on returncode != 0, so nothing is hidden when something actually goes wrong.
-    steps = [
+    steps = remote_fix + [
         (["dvc", "add",  str(data_path)],               "Updating .dvc pointer",         False),
         (["dvc", "push", str(data_path)],               "Uploading Parquet to DagsHub",  True),
         (["git", "add"] + git_add_targets,              "Staging files",                  False),
@@ -602,24 +626,28 @@ def _push_to_remote(
         (["git", "push"],                               "Pushing to GitHub",              True),
     ]
 
-    for cmd, label, echo_stdout in steps:
-        click.echo(f"\n  → {label}...")
-        result = subprocess.run(cmd, capture_output=True, text=True, env=run_env)  # env resolves SSH alias
-        if result.returncode != 0:
-            output    = result.stderr or result.stdout
-            diagnosis = _diagnose_failure(output)
-            click.echo(f"\nERROR: `{' '.join(cmd)}` failed.", err=True)
-            if diagnosis:
-                click.echo(f"  {diagnosis}", err=True)
-            click.echo("\n  Technical detail:", err=True)
-            click.echo(f"  {output}", err=True)
-            sys.exit(1)
-        if echo_stdout and result.stdout.strip():
-            click.echo(result.stdout.strip())
+    try:
+        for cmd, label, echo_stdout in steps:
+            click.echo(f"\n  → {label}...")
+            result = subprocess.run(cmd, capture_output=True, text=True, env=run_env)  # env resolves SSH alias
+            if result.returncode != 0:
+                output    = result.stderr or result.stdout
+                diagnosis = _diagnose_failure(output)
+                click.echo(f"\nERROR: `{' '.join(cmd)}` failed.", err=True)
+                if diagnosis:
+                    click.echo(f"  {diagnosis}", err=True)
+                click.echo("\n  Technical detail:", err=True)
+                click.echo(f"  {output}", err=True)
+                sys.exit(1)
+            if echo_stdout and result.stdout.strip():
+                click.echo(result.stdout.strip())
+    finally:
+        if ssh_key_file:
+            Path(ssh_key_file).unlink(missing_ok=True)   # always remove the temp key file
 
     if trigger_retrain:
         click.echo("\nGitHub Actions retrain workflow triggered.")
-        click.echo("Monitor at: https://github.com/Preempt-analytics/predictive-maintenance-capstone/actions")
+        click.echo(f"Monitor at: https://github.com/{GITHUB_REPO}/actions/workflows/retrain.yml")
     else:
         click.echo("\nCSV updated on DagsHub. No retrain triggered (retrain.trigger unchanged).")
 
@@ -774,6 +802,25 @@ def main(
     if sim_df.empty:
         click.echo("Nothing to export. Run sensor_simulator.py to generate readings.")
         return
+
+    # ── Guard against a missing-but-tracked output file ───────────────────────
+    # A .dvc pointer is a small text file committed straight to git — present
+    # after any clone. The actual tracked Parquet is only fetched by `dvc
+    # pull`, which nothing in the setup flow runs automatically. Without this
+    # check, append-mode below sees output.exists() == False and silently
+    # starts a brand-new file containing only this run's rows — discarding
+    # the shared baseline and every prior simulated row, then pushing that
+    # data loss straight to the remote. This happened for real: commits
+    # 2aef5fe/ae0b9e9 replaced a 20,000-row dataset with 1,000 fresh rows.
+    dvc_pointer = Path(str(output) + ".dvc")
+    if append and dvc_pointer.exists() and not output.exists():
+        click.echo(f"\n  {output} is tracked by DVC but missing locally — running `dvc pull` first...")
+        pull_result = subprocess.run(["dvc", "pull", str(output)], capture_output=True, text=True)
+        if pull_result.returncode != 0 or not output.exists():
+            click.echo(f"\nERROR: `dvc pull {output}` failed — refusing to guess at the dataset's state.", err=True)
+            click.echo("  Overwriting it with only this run's rows would discard the shared history.", err=True)
+            click.echo(pull_result.stderr or pull_result.stdout, err=True)
+            sys.exit(1)
 
     # ── Determine starting UDI ─────────────────────────────────────────────────
     if append and output.exists():
