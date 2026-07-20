@@ -48,6 +48,7 @@
 import json                                    # serialise log entries as single-line JSON
 import sqlite3                                # check whether simulation.db has data before drift run
 import subprocess
+import sys                                     # sys.stdout.isatty() — is this a real terminal or docker logs?
 from datetime import datetime, timezone        # UTC timestamps for monitor_log.jsonl entries
 from pathlib import Path
 
@@ -102,6 +103,28 @@ def _countdown_to_next_check(idle_seconds: float) -> None:
         tick = min(COUNTDOWN_INTERVAL_S, remaining)   # don't sleep past the deadline
         time.sleep(tick)
         remaining -= tick
+
+
+# ── Spinner helper ───────────────────────────────────────────────────────────
+# Same idea as _countdown_to_next_check, but animated: a single rotating
+# glyph (the Braille-dot style Ollama, npm, and cargo all use) instead of a
+# static line. Only used for the startup grace period below — that's the one
+# wait short and interactive enough to be worth animating. Callers must check
+# sys.stdout.isatty() first; see the fallback at the call site for why.
+
+_SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]  # Braille dot patterns, 1 glyph per frame
+_SPINNER_INTERVAL_S = 0.08                                            # 80ms — same cadence Ollama's CLI uses
+
+
+def _spin(seconds: int, label: str) -> None:
+    """Animate a spinner next to `label` for `seconds`. Assumes stdout is a TTY."""
+    ticks = int(seconds / _SPINNER_INTERVAL_S)
+    for i in range(ticks):
+        remaining = seconds - int(i * _SPINNER_INTERVAL_S)   # whole seconds left, for the countdown number
+        glyph = _SPINNER_FRAMES[i % len(_SPINNER_FRAMES)]
+        print(f"\r  {glyph} {label} {remaining:2d}s …", end="", flush=True)
+        time.sleep(_SPINNER_INTERVAL_S)
+    print("\r" + " " * (len(label) + 20) + "\r", end="", flush=True)  # wipe the line before returning
 
 
 # ── Run log ───────────────────────────────────────────────────────────────────
@@ -260,9 +283,15 @@ if __name__ == "__main__":
     # sometimes also needs a few seconds for DNS and the API healthcheck to
     # settle — the delay acts as a natural buffer for both concerns.
     print()
-    for remaining in range(STARTUP_DELAY_S, 0, -1):
-        print(f"\r  First drift check starting in {remaining:2d}s …", end="", flush=True)
-        time.sleep(1)
+    if sys.stdout.isatty():
+        _spin(STARTUP_DELAY_S, "First drift check starting in")
+    else:
+        # Docker's log driver captures raw bytes — an un-guarded \r spinner
+        # would write escape characters straight into `docker compose logs`
+        # instead of overwriting anything, so fall back to one line per tick.
+        for remaining in range(STARTUP_DELAY_S, 0, -1):
+            print(f"  First drift check starting in {remaining:2d}s …", flush=True)
+            time.sleep(1)
     print()   # newline after countdown
 
     # Run once immediately after the grace period so Frederick gets instant

@@ -12,6 +12,31 @@ WORKFLOW_RUNS="https://github.com/$REPO/actions/workflows/retrain.yml"   # this 
 # open command differs by OS — macOS uses `open`, Linux uses `xdg-open`
 _open() { case "$(uname -s)" in Darwin) open "$1" ;; Linux) xdg-open "$1" 2>/dev/null || true ;; esac; }
 
+# ── Spinner helper ─────────────────────────────────────────────────────────
+# Two frame sets: "dots" (small, single-glyph) for short/incidental waits,
+# "circle" (the bigger dotsCircle animation) for the two waits that matter
+# most here — opening the drift report and watching for the GitHub Actions
+# run. Only call this after checking `[ -t 1 ]` — a script piped to a log
+# file has no way to overwrite a line, so an un-guarded \r would just write
+# raw escape characters into that log.
+_spin() {
+    local seconds="$1" label="$2" style="${3:-dots}"
+    local frames
+    if [ "$style" = "circle" ]; then
+        frames=("⢎ " "⠎⠁" "⠊⠑" "⠈⠱" " ⡱" "⢀⡰" "⢄⡠" "⢆⡀")
+    else
+        frames=(⠋ ⠙ ⠹ ⠸ ⠼ ⠴ ⠦ ⠧ ⠇ ⠏)
+    fi
+    local ticks=$(( seconds * 1000 / 80 ))   # 80ms per frame — same cadence Ollama's CLI uses
+    local i=0
+    while [ "$i" -lt "$ticks" ]; do
+        printf "\r  %s %s" "${frames[$(( i % ${#frames[@]} ))]}" "$label"
+        sleep 0.08
+        i=$(( i + 1 ))
+    done
+    printf "\r%*s\r" 70 ""   # wipe the line before returning
+}
+
 # "id" is deliberately matched with its quotes and colon, both here and further
 # down — the same API responses also contain workflow_id, check_suite_id, etc.,
 # which a looser match would grab by mistake.
@@ -42,10 +67,14 @@ BASELINE_RUN_ID=$(_latest_run_id)
 echo ""
 echo "  The HTML report shows per-feature drift histograms and the overall verdict."
 echo "  Opening in your browser in 8 seconds..."
-sleep 2 && echo "  Opening in 6 seconds..."
-sleep 2 && echo "  Opening in 4 seconds..."
-sleep 2 && echo "  Opening in 2 seconds..."
-sleep 2
+if [ -t 1 ]; then
+    _spin 8 "Opening drift report" circle
+else
+    sleep 2 && echo "  Opening in 6 seconds..."
+    sleep 2 && echo "  Opening in 4 seconds..."
+    sleep 2 && echo "  Opening in 2 seconds..."
+    sleep 2
+fi
 if [ -f "$REPORT" ]; then
     echo "  Opening drift report: $REPORT"
     _open "$REPORT"                         # macOS: open, Linux: xdg-open
@@ -80,7 +109,11 @@ NEW_RUN_ID=""
 # stop being a real ceiling exactly when it matters most.
 ELAPSED=0
 while [ "$ELAPSED" -lt "$MAX_WAIT" ]; do
-    sleep "$POLL_INTERVAL"
+    if [ -t 1 ]; then
+        _spin "$POLL_INTERVAL" "Watching for a new run" circle
+    else
+        sleep "$POLL_INTERVAL"
+    fi
 
     CURRENT_RUN_ID=$(_latest_run_id)
     if [ -n "$CURRENT_RUN_ID" ] && [ "$CURRENT_RUN_ID" != "$BASELINE_RUN_ID" ]; then
@@ -90,7 +123,8 @@ while [ "$ELAPSED" -lt "$MAX_WAIT" ]; do
 
     ELAPSED=$(( $(date +%s) - START_EPOCH ))
 
-    # Heartbeat every ~60s so a long wait doesn't look like the terminal froze.
+    # Heartbeat every ~60s so a long wait doesn't look like the terminal froze,
+    # even between spinner ticks (e.g. right after a slow, non-timed-out API call).
     if [ "$ELAPSED" -ge "$NEXT_HEARTBEAT" ]; then
         echo "  Still watching... (${ELAPSED}s so far — still normal)"
         NEXT_HEARTBEAT=$((NEXT_HEARTBEAT + 60))

@@ -22,6 +22,42 @@ function Get-LatestRunId {
     return $null
 }
 
+# -- Spinner helper -------------------------------------------------------------
+# Two frame sets: "dots" (small, single-glyph) for short/incidental waits,
+# "circle" (the bigger dotsCircle animation) for the two waits that matter
+# most here - opening the drift report and watching for the GitHub Actions
+# run. Only call this after checking that output isn't redirected - a script
+# piped to a log file has no way to overwrite a line, so this would
+# otherwise write raw escape characters into that log instead of animating.
+function Show-Spinner {
+    param([int]$Seconds, [string]$Label, [string]$Style = "dots")
+    # Built from [char] codepoints, not literal glyphs: this file has no BOM, and
+    # Windows PowerShell 5.1 reads un-BOM'd script files using the system codepage
+    # (Western European / 1252 here), not UTF-8 - literal Braille characters in
+    # the source get silently corrupted into mojibake and fail to parse. Plain
+    # ASCII codepoint math sidesteps the file-encoding question entirely.
+    if ($Style -eq "circle") {
+        $Frames = @(
+            ([char]0x288E + ' '),
+            ([char]0x280E + [char]0x2801),
+            ([char]0x280A + [char]0x2811),
+            ([char]0x2808 + [char]0x2831),
+            (' ' + [char]0x2871),
+            ([char]0x2880 + [char]0x2870),
+            ([char]0x2884 + [char]0x2860),
+            ([char]0x2886 + [char]0x2840)
+        )
+    } else {
+        $Frames = @([char]0x280B, [char]0x2819, [char]0x2839, [char]0x2838, [char]0x283C, [char]0x2834, [char]0x2826, [char]0x2827, [char]0x2807, [char]0x280F)
+    }
+    $Ticks = [int]($Seconds * 1000 / 80)   # 80ms per frame - same cadence Ollama's CLI uses
+    for ($i = 0; $i -lt $Ticks; $i++) {
+        Write-Host -NoNewline ("`r  {0} {1}" -f $Frames[$i % $Frames.Length], $Label)
+        Start-Sleep -Milliseconds 80
+    }
+    Write-Host -NoNewline ("`r" + (' ' * 70) + "`r")   # wipe the line before returning
+}
+
 # -- Baseline: remember the run that exists before this trigger fires ---------
 # Captured as the very first thing the script does, before the drift-report
 # section below can spend any time - so a fast retraining pipeline can never
@@ -38,10 +74,14 @@ $BaselineRunId = Get-LatestRunId
 Write-Host ""
 Write-Host "  The HTML report shows per-feature drift histograms and the overall verdict."
 Write-Host "  Opening in your browser in 8 seconds..."
-Start-Sleep 2; Write-Host "  Opening in 6 seconds..."
-Start-Sleep 2; Write-Host "  Opening in 4 seconds..."
-Start-Sleep 2; Write-Host "  Opening in 2 seconds..."
-Start-Sleep 2
+if (-not [Console]::IsOutputRedirected) {
+    Show-Spinner -Seconds 8 -Label "Opening drift report" -Style circle
+} else {
+    Start-Sleep 2; Write-Host "  Opening in 6 seconds..."
+    Start-Sleep 2; Write-Host "  Opening in 4 seconds..."
+    Start-Sleep 2; Write-Host "  Opening in 2 seconds..."
+    Start-Sleep 2
+}
 if (Test-Path $Report) {
     Write-Host "  Opening drift report: $Report"
     Start-Process (Resolve-Path $Report)   # opens in default browser on Windows
@@ -76,7 +116,11 @@ $NewRunId = $null
 # a real ceiling exactly when it matters most.
 $Elapsed = 0
 while ($Elapsed -lt $MaxWait) {
-    Start-Sleep $PollInterval
+    if (-not [Console]::IsOutputRedirected) {
+        Show-Spinner -Seconds $PollInterval -Label "Watching for a new run" -Style circle
+    } else {
+        Start-Sleep $PollInterval
+    }
 
     $CurrentRunId = Get-LatestRunId
     if ($CurrentRunId -and $CurrentRunId -ne $BaselineRunId) {
