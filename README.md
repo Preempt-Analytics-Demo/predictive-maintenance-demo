@@ -67,6 +67,26 @@ If you saw a stream of readings ending with `Done — 500 readings stored`, the 
 
 ---
 
+## Prefer a menu to typing commands?
+
+Everything below this point — simulating readings, opening the drift report, watching GitHub Actions, restarting services — is also available as a single-keypress control panel. No typing, no memorizing flags:
+
+**Mac / Linux**
+
+```bash
+./preempt.sh
+```
+
+**Windows**
+
+```powershell
+.\preempt.ps1
+```
+
+Press a number, watch it run, press `Q` to quit. The sections below walk through the same actions manually — useful if you want to see the exact commands or run a step on its own.
+
+---
+
 ## You're set up — now see the <a id="ref-ml-pipeline"></a>[ML pipeline](#glossary-ml-pipeline) in action
 
 Steps 1–3 confirmed the system is running and the <a id="ref-simulation-engine"></a>[simulation engine](#glossary-simulation-engine) is connected to the prediction API. Next, trigger the fully automated retraining loop: watch the model detect data shift, push new training data to the cloud, and retrain itself.
@@ -144,23 +164,6 @@ curl http://localhost:8000/health
 ```
 
 "You should see something like: `{\"status\": \"ok\", \"model_loaded\": true}`
-
-## Interactive ASCII Menu
-
-After starting the system with `docker compose up -d`, you can run the interactive menu from the simulator container:
-
-```bash
-docker compose exec simulator ./src/menu.sh
-```
-
-The menu provides two options:
-
-1. **Smoke Test** — Verify the API is running and test basic functionality
-2. **Full Retraining Loop** — Trigger drift detection and watch the automated retraining pipeline
-
-The menu uses only ASCII characters, so it works in all terminal environments (Mac, Windows, Linux). It will run continuously and wait for your input.
-
-To exit the menu, press `Ctrl+C` in your terminal.
 
 Send a single <a id="ref-prediction-request"></a>[prediction request](#glossary-prediction-request). The field names below (`machine_type`, `air_temperature_kelvin`, etc.) are what the API actually expects — not the raw sensor CSV's column names (`Type`, `Air temperature [K]`, ...); those get translated internally.
 
