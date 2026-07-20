@@ -638,7 +638,7 @@ def _push_to_remote(
 
     if trigger_retrain:
         click.echo("\nGitHub Actions retrain workflow triggered.")
-        click.echo("Monitor at: https://github.com/Preempt-analytics/predictive-maintenance-capstone/actions")
+        click.echo(f"Monitor at: https://github.com/{GITHUB_REPO}/actions/workflows/retrain.yml")
     else:
         click.echo("\nCSV updated on DagsHub. No retrain triggered (retrain.trigger unchanged).")
 
