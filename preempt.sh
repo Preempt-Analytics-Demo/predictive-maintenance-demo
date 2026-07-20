@@ -68,9 +68,9 @@ while true; do
     echo "  ${B}${CYAN}PREEMPT ANALYTICS${R}  —  control panel"
     echo "  ${DIM}Predictive maintenance demo${R}"
     echo ""
-    echo "  ${DIM}Simulate sensors${R}"
-    echo "  ${GRN}  1${R}  Sudden-spike readings    ${DIM}(abnormal — triggers drift detection)${R}"
-    echo "  ${GRN}  2${R}  Normal readings          ${DIM}(baseline — builds comparison dataset)${R}"
+    echo "  ${DIM}Run${R}"
+    echo "  ${GRN}  1${R}  Smoke Test               ${DIM}(verify the API is connected)${R}"
+    echo "  ${GRN}  2${R}  Full Retraining Loop     ${DIM}(simulate drift, watch it retrain)${R}"
     echo ""
     echo "  ${DIM}Inspect results${R}"
     echo "  ${GRN}  3${R}  Open drift report        ${DIM}(HTML — last run's feature histograms)${R}"
@@ -89,29 +89,28 @@ while true; do
     case "$sel" in
 
         1)
-            # Sudden-spike mode: pushes sensor values outside the training distribution.
-            # 1,000 readings gives Evidently enough current data for reliable KS tests.
+            # Smoke test: confirms the simulator can reach the API end-to-end.
+            # Matches the README's own "Setup — three commands" step 3 exactly.
             if ! _docker_ok; then echo ""; echo "  Docker is not running.  Start Docker Desktop first."; echo ""; read -rp "  Press Enter to continue..." ; continue; fi
             echo ""
-            echo "  Generating 1,000 sudden-spike readings..."
+            echo "  Running smoke test — verifying the simulator can reach the API..."
             echo ""
-            docker compose run --rm simulator --mode sudden-spike --n-readings 1000
+            docker compose run --rm simulator --mode normal --n-readings 500 --pause
             echo ""
-            echo "  Done.  Choose option 3 to open the drift report."
+            echo "  Smoke test complete — the API is connected. Choose option 3 to view the drift report."
             echo ""
             read -rp "  Press Enter to continue..."
             ;;
 
         2)
-            # Normal mode: readings that match the training distribution.
-            # Use this to build up the comparison dataset without triggering a retrain.
+            # Full retraining loop: generates abnormal readings, then open_results.sh
+            # opens the drift report and polls for + opens the specific GitHub Actions run.
+            # Matches the README's "Trigger the full retraining loop" section exactly.
             if ! _docker_ok; then echo ""; echo "  Docker is not running.  Start Docker Desktop first."; echo ""; read -rp "  Press Enter to continue..." ; continue; fi
             echo ""
-            echo "  Generating 500 normal readings..."
+            echo "  Running the full retraining loop — this will take 1-5 minutes. Don't close this window."
             echo ""
-            docker compose run --rm simulator --mode normal --n-readings 500
-            echo ""
-            echo "  Done."
+            docker compose run --rm simulator --mode sudden-spike --n-readings 1000 --demo && ./open_results.sh
             echo ""
             read -rp "  Press Enter to continue..."
             ;;

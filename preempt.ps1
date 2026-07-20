@@ -47,9 +47,9 @@ function Test-Docker {
     Write-Host "  ${B}${CYAN} PREEMPT ANALYTICS${R}  --  control panel"
     Write-Host "  ${DIM}Predictive maintenance demo${R}"
     Write-Host ""
-    Write-Host "  ${DIM}Simulate sensors${R}"
-    Write-Host "  ${GRN}  1${R}  Sudden-spike readings    ${DIM}(abnormal -- triggers drift detection)${R}"
-    Write-Host "  ${GRN}  2${R}  Normal readings          ${DIM}(baseline -- builds comparison dataset)${R}"
+    Write-Host "  ${DIM}Run${R}"
+    Write-Host "  ${GRN}  1${R}  Smoke Test               ${DIM}(verify the API is connected)${R}"
+    Write-Host "  ${GRN}  2${R}  Full Retraining Loop     ${DIM}(simulate drift, watch it retrain)${R}"
     Write-Host ""
     Write-Host "  ${DIM}Inspect results${R}"
     Write-Host "  ${GRN}  3${R}  Open drift report        ${DIM}(HTML -- last run's feature histograms)${R}"
@@ -69,22 +69,23 @@ function Test-Docker {
     switch ($sel) {
 
         1 {
-            # Sudden-spike mode: pushes sensor values outside the training distribution.
-            # 1,000 readings gives Evidently enough current data for reliable KS tests.
+            # Smoke test: confirms the simulator can reach the API end-to-end.
+            # Matches the README's own "Setup -- three commands" step 3 exactly.
             if (-not (Test-Docker)) { Write-Host "`n  Docker is not running. Start Docker Desktop first.`n"; pause; continue menu }
-            Write-Host "`n  Generating 1,000 sudden-spike readings...`n"
-            docker compose run --rm simulator --mode sudden-spike --n-readings 1000
-            Write-Host "`n  Done. Choose option 3 to open the drift report.`n"
+            Write-Host "`n  Running smoke test -- verifying the simulator can reach the API...`n"
+            docker compose run --rm simulator --mode normal --n-readings 500 --pause
+            Write-Host "`n  Smoke test complete -- the API is connected. Choose option 3 to view the drift report.`n"
             pause
         }
 
         2 {
-            # Normal mode: readings that match the training distribution.
-            # Use this to build up the comparison dataset without triggering a retrain.
+            # Full retraining loop: generates abnormal readings, then open_results.ps1
+            # opens the drift report and polls for + opens the specific GitHub Actions run.
+            # Matches the README's "Trigger the full retraining loop" section exactly.
             if (-not (Test-Docker)) { Write-Host "`n  Docker is not running. Start Docker Desktop first.`n"; pause; continue menu }
-            Write-Host "`n  Generating 500 normal readings...`n"
-            docker compose run --rm simulator --mode normal --n-readings 500
-            Write-Host "`n  Done.`n"
+            Write-Host "`n  Running the full retraining loop -- this will take 1-5 minutes. Don't close this window.`n"
+            docker compose run --rm simulator --mode sudden-spike --n-readings 1000 --demo
+            if ($?) { .\open_results.ps1 }
             pause
         }
 
