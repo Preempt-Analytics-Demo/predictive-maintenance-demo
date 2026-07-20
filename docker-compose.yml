@@ -1,4 +1,4 @@
-# docker-compose.yml
+#nostic docker-compose.yml
 #
 # WHY THIS FILE EXISTS
 # The Dockerfile defines HOW to build one image. docker-compose.yml defines
@@ -17,9 +17,7 @@
 #   View logs:                 docker compose logs -f
 #   View one service's logs:   docker compose logs -f api
 
-
 services:
-
   # ── API ─────────────────────────────────────────────────────────────────────
   # The FastAPI serving layer. Loads the @production model at startup and
   # answers POST /predict requests. This is the service external callers use.
@@ -52,7 +50,7 @@ services:
       # simulation.db lives at data/simulation.db, so the single data/ volume
       # below covers it. All three services share the same host directory —
       # the simulator writes readings, the monitor reads them for drift detection.
-      - ./data:/app/data       # simulation.db + baseline CSV
+      - ./data:/app/data # simulation.db + baseline CSV
       - ./reports:/app/reports # drift reports written here are visible on the host
 
     healthcheck:
@@ -60,14 +58,19 @@ services:
       # "healthy" when it returns HTTP 200. The monitor and simulator use
       # depends_on: condition: service_healthy — they will not start until
       # this check passes, preventing predictions against an unloaded model.
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
-      interval: 30s    # how often to check
-      timeout: 10s     # how long to wait for a response
-      retries: 3       # how many failures before marking unhealthy
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')",
+        ]
+      interval: 30s # how often to check
+      timeout: 10s # how long to wait for a response
+      retries: 3 # how many failures before marking unhealthy
       start_period: 15s # grace period on startup before checks begin
 
-    restart: unless-stopped  # restart automatically if the container crashes
-
+    restart: unless-stopped # restart automatically if the container crashes
 
   # ── Monitor ──────────────────────────────────────────────────────────────────
   # Runs detect_drift.py on a schedule. When drift is detected it exports the
@@ -76,7 +79,7 @@ services:
   monitor:
     image: ghcr.io/preempt-analytics-demo/predictive-maintenance-demo:latest
     container_name: preempt-monitor
-    command: ["python", "scripts/monitor.py"]  # overrides the CMD in Dockerfile
+    command: ["python", "scripts/monitor.py"] # overrides the CMD in Dockerfile
 
     env_file:
       # MLflow credentials + SSH deploy key (GIT_SSH_KEY_B64) + remote URL.
@@ -96,8 +99,8 @@ services:
       - GIT_COMMITTER_EMAIL=${GIT_AUTHOR_EMAIL:-bot@preempt-analytics.com}
 
     volumes:
-      - ./data:/app/data     # simulation.db + baseline CSV
-      - ./reports:/app/reports  # drift HTML reports
+      - ./data:/app/data # simulation.db + baseline CSV
+      - ./reports:/app/reports # drift HTML reports
 
       # ── Scripts mount ───────────────────────────────────────────────────────
       # Overlay the image's baked-in scripts/ with the host copy. This means
@@ -129,10 +132,9 @@ services:
 
     depends_on:
       api:
-        condition: service_healthy  # wait for the API to be ready before starting
+        condition: service_healthy # wait for the API to be ready before starting
 
     restart: unless-stopped
-
 
   # ── Simulator ────────────────────────────────────────────────────────────────
   # The simulator is NOT a long-running service — it is a one-shot command you
@@ -155,7 +157,8 @@ services:
     # Inside Docker's network, containers reach each other by service name, not
     # by localhost. "api" resolves to the api container's internal IP address.
     # Using localhost here would mean "this simulator container" — the wrong target.
-    entrypoint: ["python", "src/sensor_simulator.py", "--api-url", "http://api:8000"]
+    entrypoint:
+      ["python", "src/sensor_simulator.py", "--api-url", "http://api:8000"]
 
     env_file:
       - .env.demo
@@ -172,12 +175,12 @@ services:
     # reports/ directory (what open_results.ps1 opens) never gets the fresh report
     # and silently keeps showing whatever the long-running monitor container wrote.
     volumes:
-      - ./data:/app/data        # simulation.db is written here by the simulator
-      - ./reports:/app/reports  # drift_report.html so the host sees this run's report, not a stale one
+      - ./data:/app/data # simulation.db is written here by the simulator
+      - ./reports:/app/reports # drift_report.html so the host sees this run's report, not a stale one
 
     depends_on:
       api:
-        condition: service_healthy  # simulator needs the API running to send predictions
+        condition: service_healthy # simulator needs the API running to send predictions
 
     profiles:
       # "profiles" means this service is NOT started by `docker compose up`.

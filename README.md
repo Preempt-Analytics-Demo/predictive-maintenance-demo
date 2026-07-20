@@ -106,7 +106,7 @@ docker compose run --rm simulator --mode sudden-spike --n-readings 1000 --demo; 
 
 You don't need to do anything — it's safe to just let it run.
 
-**Where to actually watch it:** `open_results.sh` / `open_results.ps1` open the specific run directly when they can. If instead you land on a *list* of runs — because you navigated to GitHub Actions yourself, or the script fell back to the list — the list alone won't show you anything happening. Click into the top row (the most recent run) to open it; that's where each step runs live, one by one.
+**Where to actually watch it:** `open_results.sh` / `open_results.ps1` open the specific run directly when they can. If instead you land on a _list_ of runs — because you navigated to GitHub Actions yourself, or the script fell back to the list — the list alone won't show you anything happening. Click into the top row (the most recent run) to open it; that's where each step runs live, one by one.
 
 **What it's doing:** Training a new version of the prediction model on the full sensor dataset, now including the readings you just generated.
 
@@ -143,7 +143,24 @@ Check the API is healthy and which model version is loaded:
 curl http://localhost:8000/health
 ```
 
-You should see something like: `{"status": "ok", "model_loaded": true}`
+"You should see something like: `{\"status\": \"ok\", \"model_loaded\": true}`
+
+## Interactive ASCII Menu
+
+After starting the system with `docker compose up -d`, you can run the interactive menu from the simulator container:
+
+```bash
+docker compose exec simulator ./src/menu.sh
+```
+
+The menu provides two options:
+
+1. **Smoke Test** — Verify the API is running and test basic functionality
+2. **Full Retraining Loop** — Trigger drift detection and watch the automated retraining pipeline
+
+The menu uses only ASCII characters, so it works in all terminal environments (Mac, Windows, Linux). It will run continuously and wait for your input.
+
+To exit the menu, press `Ctrl+C` in your terminal.
 
 Send a single <a id="ref-prediction-request"></a>[prediction request](#glossary-prediction-request). The field names below (`machine_type`, `air_temperature_kelvin`, etc.) are what the API actually expects — not the raw sensor CSV's column names (`Type`, `Air temperature [K]`, ...); those get translated internally.
 
