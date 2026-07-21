@@ -157,7 +157,7 @@ Start-BootSequence -AsciiArt $AsciiArt
             # Smoke test: confirms the simulator can reach the API end-to-end.
             # Matches the README's own "Setup -- three commands" step 3 exactly.
             Show-Spinner -Seconds 2 -Label "Spinning up simulation engine"
-            if (-not (Test-Docker)) { Write-Host "`n  Docker is not running. Start Docker Desktop first.`n"; pause; continue menu }
+            if (-not (Test-Docker)) { Write-Host "`n  ${YLW}$([char]0x26A0)  Docker is not running.${R} Start Docker Desktop first.`n"; pause; continue menu }
             Write-Host "`n  Running smoke test -- verifying the simulator can reach the API...`n"
             docker compose run --rm simulator --mode normal --n-readings 500 --pause
             Write-Host "`n  Smoke test complete -- the API is connected. Choose option 3 to view the drift report.`n"
@@ -169,7 +169,7 @@ Start-BootSequence -AsciiArt $AsciiArt
             # opens the drift report and polls for + opens the specific GitHub Actions run.
             # Matches the README's "Trigger the full retraining loop" section exactly.
             Show-Spinner -Seconds 2 -Label "Engaging full retraining sequence"
-            if (-not (Test-Docker)) { Write-Host "`n  Docker is not running. Start Docker Desktop first.`n"; pause; continue menu }
+            if (-not (Test-Docker)) { Write-Host "`n  ${YLW}$([char]0x26A0)  Docker is not running.${R} Start Docker Desktop first.`n"; pause; continue menu }
             Write-Host "`n  Running the full retraining loop -- this will take 1-5 minutes. Don't close this window.`n"
             docker compose run --rm simulator --mode sudden-spike --n-readings 1000 --demo
             if ($?) { .\open_results.ps1 }
@@ -200,7 +200,7 @@ Start-BootSequence -AsciiArt $AsciiArt
             # Stream the monitor container's live output.
             # Ctrl+C exits the log stream; the monitor itself keeps running.
             Show-Spinner -Seconds 2 -Label "Engaging live monitoring feed"
-            if (-not (Test-Docker)) { Write-Host "`n  Docker is not running. Start Docker Desktop first.`n"; pause; continue menu }
+            if (-not (Test-Docker)) { Write-Host "`n  ${YLW}$([char]0x26A0)  Docker is not running.${R} Start Docker Desktop first.`n"; pause; continue menu }
             Write-Host "`n  Streaming monitor output (Ctrl+C to stop):`n"
             docker compose logs -f monitor
         }
@@ -209,7 +209,7 @@ Start-BootSequence -AsciiArt $AsciiArt
             # Pull the latest image from GHCR and restart all services.
             # Use this after a new version is published (e.g. after a model retrain).
             Show-Spinner -Seconds 2 -Label "Powering up services"
-            if (-not (Test-Docker)) { Write-Host "`n  Docker is not running. Start Docker Desktop first.`n"; pause; continue menu }
+            if (-not (Test-Docker)) { Write-Host "`n  ${YLW}$([char]0x26A0)  Docker is not running.${R} Start Docker Desktop first.`n"; pause; continue menu }
             Write-Host "`n  Pulling latest image and restarting services...`n"
             docker compose pull
             docker compose up -d

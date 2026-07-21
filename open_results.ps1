@@ -8,6 +8,14 @@ $Report  = "reports\drift_report.html"
 $Repo    = "Preempt-Analytics-Demo/predictive-maintenance-demo"
 $WorkflowRuns = "https://github.com/$Repo/actions/workflows/retrain.yml"   # this one workflow's runs, not every workflow in the repo
 
+# -- ANSI colour helpers ---------------------------------------------------------
+# Same convention as preempt.ps1 - color marks what matters at a glance: green
+# for a successful open, yellow for "didn't find what we expected."
+$ESC = [char]27
+$R   = "$ESC[0m"
+$GRN = "$ESC[92m"
+$YLW = "$ESC[93m"
+
 # -TimeoutSec caps how long the request itself can sit waiting: without it, a
 # request that gets silently dropped by a firewall, proxy, or VPN (rather than
 # actively refused) can hang far longer than any timeout this script tries to
@@ -84,10 +92,10 @@ if (-not [Console]::IsOutputRedirected) {
     Start-Sleep 2
 }
 if (Test-Path $Report) {
-    Write-Host "  Opening drift report: $Report"
+    Write-Host "  ${GRN}$([char]0x2713)${R}  Opening drift report: $Report"
     Start-Process (Resolve-Path $Report)   # opens in default browser on Windows
 } else {
-    Write-Host "  No drift report found at $Report - run the simulator first."
+    Write-Host "  ${YLW}$([char]0x26A0)  No drift report found${R} at $Report - run the simulator first."
 }
 
 # -- Watch for the new retraining run -------------------------------------------
@@ -149,18 +157,18 @@ if ($NewRunId) {
     } catch { $JobUrl = $null }
 
     if ($JobUrl) {
-        Write-Host "  Opening the retraining job live: $JobUrl"
+        Write-Host "  ${GRN}$([char]0x2713)${R}  Opening the retraining job live: $JobUrl"
         Start-Process $JobUrl
     } else {
         $RunUrl = "https://github.com/$Repo/actions/runs/$NewRunId"
-        Write-Host "  Opening the retraining run: $RunUrl"
+        Write-Host "  ${GRN}$([char]0x2713)${R}  Opening the retraining run: $RunUrl"
         Start-Process $RunUrl
     }
 } else {
     # No new run within MaxWait - fall back to the workflow's own run list.
     # Still far more targeted than the repo's general Actions tab, which mixes
     # in the unrelated docker-publish workflow.
-    Write-Host "  No new run appeared within ${MaxWait}s - opening the retraining workflow's run list instead."
+    Write-Host "  ${YLW}$([char]0x26A0)  No new run appeared${R} within ${MaxWait}s - opening the retraining workflow's run list instead."
     Write-Host "  Click the top row (the most recent run) to watch it live."
     Start-Process $WorkflowRuns
 }

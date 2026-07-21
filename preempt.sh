@@ -180,7 +180,7 @@ while true; do
             # Smoke test: confirms the simulator can reach the API end-to-end.
             # Matches the README's own "Setup — three commands" step 3 exactly.
             _spin 2 "Spinning up simulation engine"
-            if ! _docker_ok; then echo ""; echo "  Docker is not running.  Start Docker Desktop first."; echo ""; read -rp "  Press Enter to continue..." ; continue; fi
+            if ! _docker_ok; then echo ""; echo "  ${YLW}⚠  Docker is not running.${R}  Start Docker Desktop first."; echo ""; read -rp "  Press Enter to continue..." ; continue; fi
             echo ""
             echo "  Running smoke test — verifying the simulator can reach the API..."
             echo ""
@@ -196,7 +196,7 @@ while true; do
             # opens the drift report and polls for + opens the specific GitHub Actions run.
             # Matches the README's "Trigger the full retraining loop" section exactly.
             _spin 2 "Engaging full retraining sequence"
-            if ! _docker_ok; then echo ""; echo "  Docker is not running.  Start Docker Desktop first."; echo ""; read -rp "  Press Enter to continue..." ; continue; fi
+            if ! _docker_ok; then echo ""; echo "  ${YLW}⚠  Docker is not running.${R}  Start Docker Desktop first."; echo ""; read -rp "  Press Enter to continue..." ; continue; fi
             echo ""
             echo "  Running the full retraining loop — this will take 1-5 minutes. Don't close this window."
             echo ""
@@ -234,7 +234,7 @@ while true; do
             # Stream the monitor container's live output.
             # Ctrl+C exits the log stream; the monitor itself keeps running.
             _spin 2 "Engaging live monitoring feed"
-            if ! _docker_ok; then echo ""; echo "  Docker is not running.  Start Docker Desktop first."; echo ""; read -rp "  Press Enter to continue..." ; continue; fi
+            if ! _docker_ok; then echo ""; echo "  ${YLW}⚠  Docker is not running.${R}  Start Docker Desktop first."; echo ""; read -rp "  Press Enter to continue..." ; continue; fi
             echo ""
             echo "  Streaming monitor output (Ctrl+C to stop):"
             echo ""
@@ -247,7 +247,7 @@ while true; do
         6)
             # Pull the latest image from GHCR and restart all services.
             _spin 2 "Powering up services"
-            if ! _docker_ok; then echo ""; echo "  Docker is not running.  Start Docker Desktop first."; echo ""; read -rp "  Press Enter to continue..." ; continue; fi
+            if ! _docker_ok; then echo ""; echo "  ${YLW}⚠  Docker is not running.${R}  Start Docker Desktop first."; echo ""; read -rp "  Press Enter to continue..." ; continue; fi
             echo ""
             echo "  Pulling latest image and restarting services..."
             echo ""

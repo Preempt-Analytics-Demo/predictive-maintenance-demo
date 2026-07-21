@@ -9,6 +9,14 @@ REPORT="reports/drift_report.html"
 REPO="Preempt-Analytics-Demo/predictive-maintenance-demo"
 WORKFLOW_RUNS="https://github.com/$REPO/actions/workflows/retrain.yml"   # this one workflow's runs, not every workflow in the repo
 
+# ── ANSI colour helpers ────────────────────────────────────────────────────────
+# Same convention as preempt.sh — color marks what matters at a glance: green
+# for a successful open, yellow for "didn't find what we expected."
+ESC=$'\033'
+R="${ESC}[0m"
+GRN="${ESC}[92m"
+YLW="${ESC}[93m"
+
 # open command differs by OS — macOS uses `open`, Linux uses `xdg-open`
 _open() { case "$(uname -s)" in Darwin) open "$1" ;; Linux) xdg-open "$1" 2>/dev/null || true ;; esac; }
 
@@ -77,10 +85,10 @@ else
     sleep 2
 fi
 if [ -f "$REPORT" ]; then
-    echo "  Opening drift report: $REPORT"
+    echo "  ${GRN}✓${R}  Opening drift report: $REPORT"
     _open "$REPORT"                         # macOS: open, Linux: xdg-open
 else
-    echo "  No drift report found at $REPORT — run the simulator first."
+    echo "  ${YLW}⚠  No drift report found${R} at $REPORT — run the simulator first."
 fi
 
 # ── Watch for the new retraining run ──────────────────────────────────────────
@@ -141,18 +149,18 @@ if [ -n "$NEW_RUN_ID" ]; then
         | grep -o '"html_url": "[^"]*"' | head -1 | cut -d'"' -f4)
 
     if [ -n "$JOB_URL" ]; then
-        echo "  Opening the retraining job live: $JOB_URL"
+        echo "  ${GRN}✓${R}  Opening the retraining job live: $JOB_URL"
         _open "$JOB_URL"
     else
         RUN_URL="https://github.com/$REPO/actions/runs/$NEW_RUN_ID"
-        echo "  Opening the retraining run: $RUN_URL"
+        echo "  ${GRN}✓${R}  Opening the retraining run: $RUN_URL"
         _open "$RUN_URL"
     fi
 else
     # No new run within MAX_WAIT — fall back to the workflow's own run list.
     # Still far more targeted than the repo's general Actions tab, which mixes
     # in the unrelated docker-publish workflow.
-    echo "  No new run appeared within ${MAX_WAIT}s — opening the retraining workflow's run list instead."
+    echo "  ${YLW}⚠  No new run appeared${R} within ${MAX_WAIT}s — opening the retraining workflow's run list instead."
     echo "  Click the top row (the most recent run) to watch it live."
     _open "$WORKFLOW_RUNS"
 fi

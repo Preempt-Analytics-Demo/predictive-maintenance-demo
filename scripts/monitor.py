@@ -62,6 +62,14 @@ ROOT = Path(__file__).resolve().parent.parent
 LOG_PATH      = ROOT / "reports" / "monitor_log.jsonl"  # one JSON line appended per run; never overwritten
 SIMULATION_DB = ROOT / "data" / "simulation.db"         # checked before each drift run
 
+# ── Console styling ───────────────────────────────────────────────────────────
+# Same ANSI convention as preempt.sh/.ps1: color marks what a fast scroll
+# through `docker compose logs -f monitor` should catch without reading every
+# line — green means it passed, red means it needs attention, yellow means
+# there's an action to take, cyan marks a process that just started.
+_B, _DIM, _R = "\033[1m", "\033[2m", "\033[0m"
+_CYAN, _GREEN, _RED, _YELLOW = "\033[96m", "\033[92m", "\033[91m", "\033[93m"
+
 # ── Timing ────────────────────────────────────────────────────────────────────
 # How long to wait before the very first drift check at startup, and how often
 # to print the countdown line between checks. Both values are in seconds.
@@ -154,16 +162,16 @@ ACTIONS_URL = "https://github.com/Preempt-Analytics-Demo/predictive-maintenance-
 
 def check_drift() -> None:
     now = datetime.now(timezone.utc).strftime("%H:%M:%S UTC")
-    print(f"\n{'─' * 60}")
-    print(f"  [{now}]  Drift check running...")
-    print(f"{'─' * 60}")
+    print(f"\n{_DIM}{'─' * 60}{_R}")
+    print(f"  {_CYAN}▍{_R} Drift check running…  {_DIM}[{now}]{_R}")
+    print(f"{_DIM}{'─' * 60}{_R}")
 
     # ── Step 0: Guard — require at least one simulation row ───────────────────
     # Running Evidently with an empty database produces a misleading "STABLE"
     # verdict (exit 0 from detect_drift.py).  Checking here gives Frederick a
     # plain "nothing to compare yet" message and skips the full computation.
     if not _db_has_data():
-        print("\n  ○  No simulation data yet — the database is empty.")
+        print(f"\n  {_YELLOW}○  No simulation data yet{_R} — the database is empty.")
         print("     Run the simulator to generate readings, then this monitor")
         print("     will compare them to the training baseline automatically:")
         print()
@@ -175,14 +183,14 @@ def check_drift() -> None:
     # ── Step 1: Run drift detection ───────────────────────────────────────────
     # detect_drift.py exits with code 0 (no drift) or 1 (drift detected).
     # We read the exit code to decide whether to trigger the export.
-    print("\n  ◆  PHASE 1/2 — Analysing sensor distributions…")
+    print(f"\n  {_CYAN}▍{_R} Phase 1/2 — Analysing sensor distributions…")
     result = subprocess.run(
         ["python", "scripts/detect_drift.py"],
         cwd=ROOT,
     )
 
     if result.returncode == 0:
-        print("\n  ✓  STABLE — sensor distributions look normal.")
+        print(f"\n  {_GREEN}✓  STABLE{_R} — sensor distributions look normal.")
         print("     No retraining needed.")
         _append_log(drift_detected=False, retrain_triggered=False)   # record the PASS
         return
@@ -194,7 +202,7 @@ def check_drift() -> None:
     #   --retrain : writes a UTC timestamp to retrain.trigger and commits + pushes
     #
     # GitHub Actions watches retrain.trigger — a change there fires retrain.yml.
-    print("\n  ◆  PHASE 2/2 — Uploading data and triggering retraining…")
+    print(f"\n  {_CYAN}▍{_R} Phase 2/2 — Uploading data and triggering retraining…")
     print("     This may take a few minutes — the DagsHub upload is the slow part. Please wait.\n")
     export_result = subprocess.run(
         ["python", "scripts/export_simulation_to_parquet.py", "--purge", "--push", "--retrain"],
@@ -202,14 +210,15 @@ def check_drift() -> None:
     )
 
     if export_result.returncode != 0:
-        print("\n  ERROR: Upload/push failed. Will retry on the next check (in ~30s).")
+        print(f"\n  {_RED}⚠  ERROR{_R} — upload/push failed.")
+        print(f"  {_DIM}⟳  Will retry automatically on the next check (in ~30s).{_R}")
         print("  If this keeps failing, check README → 'Trigger the full retraining loop'.")
         _append_log(drift_detected=True, retrain_triggered=False)
         return
 
-    print("\n" + "—" * 60)
-    print("  RETRAINING TRIGGERED SUCCESSFULLY")
-    print("—" * 60)
+    print("\n" + f"{_GREEN}{'—' * 60}{_R}")
+    print(f"  {_B}{_GREEN}RETRAINING TRIGGERED SUCCESSFULLY{_R}")
+    print(f"{_GREEN}{'—' * 60}{_R}")
     print()
     print("  The model is now retraining in the cloud.")
     print("  Watch it run live — open this link in your browser:")
@@ -217,7 +226,7 @@ def check_drift() -> None:
     print(f"  {ACTIONS_URL}")
     print()
     print("  See README → 'Trigger the full retraining loop' for what to expect.")
-    print("—" * 60)
+    print(f"{_GREEN}{'—' * 60}{_R}")
     _append_log(drift_detected=True, retrain_triggered=True)
 
 
@@ -244,30 +253,37 @@ schedule.every(30).seconds.do(check_drift)
 # how long until the next job is due, so we sleep precisely that long rather
 # than waking up every 60 seconds to find nothing to do.
 if __name__ == "__main__":
+    # Force UTF-8 stdout regardless of the host's default codepage — this file
+    # prints box-drawing, ▍/✓/○/⚠/⟳ glyphs, which raise UnicodeEncodeError
+    # under Windows' cp1252 outside Docker's own UTF-8 locale (same verified
+    # risk as sensor_simulator.py's --demo banner).
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8")
+
     # ── Startup banner ────────────────────────────────────────────────────────
     # This block prints once when the container starts. It is Frederick's first
     # view of the monitor — the goal is to answer "what is this, what should I
     # do next, and how will I know it worked?" before any drift check runs.
     print()
-    print("—" * 60)
-    print("  PREEMPT ANALYTICS — DRIFT MONITOR")
-    print("—" * 60)
+    print(f"{_DIM}{'—' * 60}{_R}")
+    print(f"  {_B}{_CYAN}PREEMPT ANALYTICS — DRIFT MONITOR{_R}")
+    print(f"{_DIM}{'—' * 60}{_R}")
     print()
-    print("  What this does")
-    print("  ──────────────")
+    print(f"  {_B}What this does{_R}")
+    print(f"  {_DIM}──────────────{_R}")
     print("  Every minute this monitor compares the live sensor readings")
     print("  in simulation.db to the distribution the model was trained")
     print("  on.  When it detects significant drift (≥ 20 % of features"),
     print("  shifted), it automatically exports the new data, pushes it")
     print("  to DagsHub, and fires the GitHub Actions retraining workflow.")
     print()
-    print("  What YOU need to do")
-    print("  ───────────────────")
-    print("  1. Generate sensor readings (if you haven't yet):")
+    print(f"  {_B}What YOU need to do{_R}")
+    print(f"  {_DIM}───────────────────{_R}")
+    print(f"  {_GREEN}1.{_R} Generate sensor readings (if you haven't yet):")
     print("       docker compose run --rm simulator \\")
     print("         --mode sudden-spike --n-readings 500")
     print()
-    print("  2. That's it — this monitor handles everything else.")
+    print(f"  {_GREEN}2.{_R} That's it — this monitor handles everything else.")
     print("     Watch the retraining workflow run live:")
     print(f"     {ACTIONS_URL}")
     print()
@@ -275,7 +291,7 @@ if __name__ == "__main__":
     print("    docker compose logs -f monitor")
     print()
     print(f"  Audit log: reports/monitor_log.jsonl")   # host path: <project-root>/reports/
-    print("—" * 60)
+    print(f"{_DIM}{'—' * 60}{_R}")
 
     # ── Startup grace period ──────────────────────────────────────────────────
     # Give Frederick STARTUP_DELAY_S seconds to read the banner (and optionally
