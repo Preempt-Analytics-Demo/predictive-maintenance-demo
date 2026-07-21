@@ -807,25 +807,38 @@ def main(
     # to know it's coming, per the same front-load-the-context primer approach
     # used elsewhere in this file.
     if demo:
+        # Force UTF-8 stdout regardless of the host's default codepage. This
+        # banner prints circled-number and rule glyphs that raise
+        # UnicodeEncodeError under Windows' cp1252 (verified: plain "—" survives
+        # cp1252, but "①"/"❯" do not) — cheap insurance since the container's
+        # own locale is UTF-8, but a bare `python src/sensor_simulator.py` on
+        # Windows outside Docker is not.
+        if hasattr(sys.stdout, "reconfigure"):
+            sys.stdout.reconfigure(encoding="utf-8")
+
+        # ANSI color, plain ASCII escape bytes — same convention as preempt.sh/.ps1.
+        _b, _dim, _r = "\033[1m", "\033[2m", "\033[0m"
+        _cyan, _green, _yellow = "\033[96m", "\033[92m", "\033[93m"
+
         print()
-        print("—" * 60)
-        print("  Full retraining loop — what's about to happen")
-        print("—" * 60)
+        print(f"{_dim}{'—' * 60}{_r}")
+        print(f"  {_b}{_cyan}Full retraining loop — what's about to happen{_r}")
+        print(f"{_dim}{'—' * 60}{_r}")
         print()
-        print("  1. 1,000 abnormal readings will be generated and sent to the")
+        print(f"  {_green}①{_r}  1,000 abnormal readings will be generated and sent to the")
         print("     prediction API.")
-        print("  2. Drift detection will run immediately and print a report in")
+        print(f"  {_green}②{_r}  Drift detection will run immediately and print a report in")
         print("     this terminal — you'll see which sensor features shifted")
         print("     and whether the threshold was crossed.")
-        print("  3. The drift report will open in your browser")
+        print(f"  {_green}③{_r}  The drift report will open in your browser")
         print("     (reports/drift_report.html).")
-        print("  4. The GitHub Actions page will open — if drift was detected,")
+        print(f"  {_green}④{_r}  The GitHub Actions page will open — if drift was detected,")
         print("     a retraining workflow will appear there within a few minutes")
         print("     and run automatically. Click into that run (not just the")
         print("     list) to watch its steps happen live, one by one.")
         print()
         if sys.stdin.isatty():
-            input("  Press Enter to continue...")
+            input(f"  {_yellow}❯ Press Enter to continue...{_r}")
             print()
 
     print("\nPredictive Maintenance — Sensor Simulator")
