@@ -41,3 +41,22 @@ def test_improved_model_can_still_fail_the_floor_gate():
     improvement, floor = evaluate_gates(new_f1=0.50, prod_f1=0.40, min_f1=0.60)
     assert improvement is True
     assert floor is False
+
+
+def test_suspect_production_score_skips_the_improvement_gate():
+    # A perfect (or near-perfect) @production f1_test almost always means
+    # leaked/corrupted training data, not a genuinely unbeatable model —
+    # requiring new_f1 > 1.0 would permanently block every future retrain.
+    # This is exactly what happened in production: see promote_model.py's
+    # "GATE 1 SUSPECT-SCORE ESCAPE HATCH" comment.
+    improvement, floor = evaluate_gates(new_f1=0.75, prod_f1=1.0, min_f1=0.60)
+    assert improvement is True
+    assert floor is True
+
+
+def test_suspect_production_score_does_not_waive_the_floor_gate():
+    # The escape hatch only removes the comparison — a genuinely weak
+    # candidate must still clear the absolute floor.
+    improvement, floor = evaluate_gates(new_f1=0.50, prod_f1=1.0, min_f1=0.60)
+    assert improvement is True
+    assert floor is False

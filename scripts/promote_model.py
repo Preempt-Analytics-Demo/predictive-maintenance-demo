@@ -22,6 +22,15 @@
 #   Gate 1 — improvement: new f1_test > current @production f1_test
 #   Gate 2 — floor:       new f1_test >= --min-f1 (default 0.85 binary, 0.80 multiclass)
 #
+# GATE 1 SUSPECT-SCORE ESCAPE HATCH
+#   A perfect f1_test (1.0) almost always means leaked or corrupted training
+#   data, not a genuinely unbeatable model (this happened for real: a
+#   contaminated ai4i2020.parquet baseline produced a fluke 1.0 that then
+#   froze @production for 30 versions, since nothing can score > 1.0). When
+#   the CURRENT @production score is >= SUSPECT_F1_THRESHOLD, gate 1 is
+#   treated as automatically passed instead of enforced — the floor gate
+#   (Gate 2) still applies, so a bad candidate can't sneak through.
+#
 # USAGE
 #   # Review only (safe — never changes the alias)
 #   python scripts/promote_model.py --model-name predictive-maintenance-binary
@@ -44,6 +53,10 @@ import sys
 import click
 import mlflow
 from mlflow import MlflowClient
+
+# f1_test at or above this is treated as too good to trust rather than an
+# unbeatable bar — see "GATE 1 SUSPECT-SCORE ESCAPE HATCH" above.
+SUSPECT_F1_THRESHOLD = 0.999
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -103,8 +116,12 @@ def evaluate_gates(new_f1: float, prod_f1: float | None, min_f1: float) -> tuple
     Returns:
         (gate_improvement, gate_floor) — both True means promote.
     """
-    gate_improvement = (prod_f1 is None) or (new_f1 > prod_f1)  # no current model = automatic pass
-    gate_floor       = new_f1 >= min_f1                          # absolute floor, independent of comparison
+    # A suspiciously perfect current champion (see SUSPECT_F1_THRESHOLD above)
+    # is not a bar to clear — comparing against it would permanently block
+    # every future retrain, honest or not, since nothing scores above 1.0.
+    prod_is_suspect = (prod_f1 is not None) and (prod_f1 >= SUSPECT_F1_THRESHOLD)
+    gate_improvement = (prod_f1 is None) or prod_is_suspect or (new_f1 > prod_f1)
+    gate_floor       = new_f1 >= min_f1   # absolute floor, independent of comparison
     return gate_improvement, gate_floor
 
 
@@ -200,11 +217,12 @@ def main(model_name: str, min_f1: float | None, auto: bool) -> None:
     # Gate 2: new model must clear the minimum F1 floor regardless of comparison.
     gate_improvement, gate_floor = evaluate_gates(new_f1, prod_f1, min_f1)
 
-    improvement_str = (
-        "PASS (no current production version)"
-        if prod_f1 is None
-        else f"{'PASS' if gate_improvement else 'FAIL'}  ({new_f1:.4f} vs {prod_f1:.4f})"
-    )
+    if prod_f1 is None:
+        improvement_str = "PASS (no current production version)"
+    elif prod_f1 >= SUSPECT_F1_THRESHOLD:
+        improvement_str = f"PASS (current @production f1={prod_f1:.4f} is suspect — comparison skipped)"
+    else:
+        improvement_str = f"{'PASS' if gate_improvement else 'FAIL'}  ({new_f1:.4f} vs {prod_f1:.4f})"
     print(f"  Gate 1 — improvement       : {improvement_str}")
     print(f"  Gate 2 — floor >= {min_f1}  : {'PASS' if gate_floor else 'FAIL'}  ({new_f1:.4f})")
     print()
