@@ -160,6 +160,28 @@ def _load_training_rows() -> dict:
     return _TRAINING_ROWS
 
 
+# ── Real PWF/OSF failure row cache ─────────────────────────────────────────────
+# Loaded once from ai4i2020_baseline.csv on first use, same pattern as
+# _load_training_rows() above. Backs _sample_pwf_osf_shift()'s bootstrap
+# resampling — see the FAILURE INJECTION CONSTANTS section below for why this
+# replaced a fixed offset.
+_PWF_OSF_ROWS: dict | None = None
+
+
+def _load_pwf_osf_rows() -> dict:
+    """Return real PWF/OSF failure rows' (rpm, torque), loading from CSV on first call."""
+    global _PWF_OSF_ROWS
+    if _PWF_OSF_ROWS is None:
+        csv_path = Path(__file__).parent.parent / "data" / "ai4i2020_baseline.csv"
+        df = pd.read_csv(csv_path)
+        failures = df[(df["PWF"] == 1) | (df["OSF"] == 1)]  # union: injector doesn't target one or the other
+        _PWF_OSF_ROWS = {
+            "rpm":    failures["Rotational speed [rpm]"].values.astype(float),
+            "torque": failures["Torque [Nm]"].values.astype(float),
+        }
+    return _PWF_OSF_ROWS
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # FAILURE INJECTION CONSTANTS
 # ══════════════════════════════════════════════════════════════════════════════
@@ -182,17 +204,54 @@ def _load_training_rows() -> dict:
 # 56.9% are PWF/OSF (rpm/torque only). Mixing them for all failures
 # over-injected the HDF temperature signature 3× and inflated temp_diff drift.
 # HDF_FRACTION drives the split inside generate_raw_reading().
+#
+# PWF/OSF: bootstrap the real failures, don't fix the offset (2026-07-30):
+# The old design shifted every injected PWF/OSF reading by the exact same
+# amount (rpm always -350, torque always +18). Measured against the real 95
+# PWF failures, that produced power_w with std=509 vs the real std=3087 — 6x
+# too narrow — and could only ever land in the "high-power overload" regime,
+# never the "low-power stall" regime real PWF failures also include (real
+# min power_w=1148W; the fixed offset's min was 5789W). Bootstrap-resampling
+# an actual real failure row (rather than fitting a parametric distribution
+# to only 95-98 examples, which risks overfitting the fit itself) reproduces
+# both regimes and the true joint rpm/torque spread for free. Small jitter
+# keeps thousands of simulated readings from repeating the same ~190
+# historical rows verbatim. HDF's Normal(8.2, 0.3) above needed no such fix —
+# it already matches the real 115 HDF rows (mean=8.228, std=0.282) closely.
+#
+# This only applies to --mode normal: that's the mode whose data actually
+# accumulates into simulation.db and feeds the retrain loop, so it's the one
+# that should look like real data. gradual-drift/sudden-spike exist to make
+# an obvious, legible spike for a live demo walkthrough — realism would
+# undercut the point of those modes, so they keep the original fixed shift.
 
 FAILURE_TORQUE_ADD_NM      = 18.0
 FAILURE_RPM_SHIFT          = -350.0
 FAILURE_TEMP_OFFSET_KELVIN = (8.2, 0.3)  # HDF gap: mean 8.228 K, std 0.282 K (from training data)
 HDF_FRACTION               = 0.339       # 33.9% of failures in training data are HDF
+PWF_OSF_JITTER_STD_FRACTION = 0.05       # +-5% multiplicative noise on the bootstrapped rpm/torque
 
 BASE_FAILURE_RATE       = 0.034     # 3.4% — matches the training dataset failure rate
 GRADUAL_DRIFT_PEAK_RATE = 0.25
 SUDDEN_SPIKE_RATE       = 0.40
 
 DB_PATH = Path("data/simulation.db")  # inside data/ so Docker's bind-mount covers it automatically
+
+
+def _sample_pwf_osf_shift() -> tuple[float, float]:
+    """Bootstrap-resample one real PWF/OSF failure's (rpm, torque), with jitter.
+
+    Returns:
+        (rpm, torque) — realistic replacements for generate_raw_reading()'s
+        PWF/OSF branch, drawn from the real failure population instead of a
+        fixed offset. See the PWF/OSF comment above for why.
+    """
+    rows = _load_pwf_osf_rows()
+    idx = np.random.randint(len(rows["rpm"]))            # pick one real failure row
+    jitter = np.random.normal(1.0, PWF_OSF_JITTER_STD_FRACTION, size=2)  # +-5% on each value
+    rpm    = rows["rpm"][idx] * jitter[0]
+    torque = rows["torque"][idx] * jitter[1]
+    return rpm, torque
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -432,7 +491,7 @@ def call_predict_api(client: httpx.Client, api_url: str, raw: dict) -> tuple[int
 # SENSOR READING GENERATION
 # ══════════════════════════════════════════════════════════════════════════════
 
-def generate_raw_reading(tool_wear_minutes: float, inject_failure: bool) -> dict:
+def generate_raw_reading(tool_wear_minutes: float, inject_failure: bool, mode: str = "normal") -> dict:
     """Sample one sensor reading from the AI4I training distribution.
 
     Normal readings are drawn from Gaussian distributions fitted to the
@@ -447,6 +506,11 @@ def generate_raw_reading(tool_wear_minutes: float, inject_failure: bool) -> dict
                            externally so each machine ages independently.
         inject_failure:    True → shift sensor values toward failure zones.
                            False → sample from normal operating distributions.
+        mode:              "normal" gets the realistic bootstrap-resampled PWF/OSF
+                           shift (this is the data that feeds the retrain loop).
+                           "gradual-drift"/"sudden-spike" keep the original fixed
+                           shift — an obvious, legible spike for a live demo, not
+                           training data, so realism isn't the point there.
 
     Returns:
         Dict using original CSV column names. These names must match
@@ -469,10 +533,15 @@ def generate_raw_reading(tool_wear_minutes: float, inject_failure: bool) -> dict
         # We keep the sampled air_temp (real sensor value) and replace only the
         # process_temp with the HDF-shifted value so the gap reflects the failure.
         process_temp = air_temp + np.random.normal(*FAILURE_TEMP_OFFSET_KELVIN)
+    elif inject_failure and mode == "normal":
+        # PWF / OSF, realistic: bootstrap a real failure's rpm/torque + jitter.
+        # See the PWF/OSF comment in FAILURE INJECTION CONSTANTS for why this
+        # replaced a fixed offset for the mode that actually trains the model.
+        rpm, torque = _sample_pwf_osf_shift()
     elif inject_failure:
-        # PWF / OSF: shift rpm down and torque up from the sampled baseline.
-        # Applying offsets to a real row keeps the shift physically grounded —
-        # the machine was already in a realistic operating state before the fault.
+        # PWF / OSF, demo modes: shift rpm down and torque up from the sampled
+        # baseline by a fixed amount — an obvious, repeatable spike for a live
+        # walkthrough. Not used for retraining, so realism isn't the goal here.
         rpm    = max(500, rpm    + int(FAILURE_RPM_SHIFT))
         torque = max(0.0, torque + FAILURE_TORQUE_ADD_NM)
 
@@ -626,7 +695,7 @@ def run_simulation(
             inject_failure = random.random() < rate  # True if random draw falls below the rate
 
             # ── Generate raw sensor values ───────────────────────────────────────
-            raw = generate_raw_reading(tool_wear, inject_failure)
+            raw = generate_raw_reading(tool_wear, inject_failure, mode)
 
             # ── Compute engineered features FOR STORAGE ONLY ────────────────────
             # The API will compute these again internally for inference. We compute
