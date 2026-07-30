@@ -42,8 +42,19 @@ metrics.txt
 pip-log.txt
 pip-delete-this-directory.txt
 
-# Evidently drift reports (generated artefacts — overwritten on each run)
-reports/
+# Evidently drift reports (generated artefacts — overwritten on each run).
+# reports/* (not reports/) plus explicit !negations below, because a bare
+# "reports/" excludes the directory itself — git won't even traverse into it
+# to check per-file negations, so they'd silently do nothing. The three
+# leaderboard files are the one thing in here that's meant to be committed:
+# they're what makes the model leaderboard visible on GitHub without a
+# DagsHub account (see README's MLflow section) — promotion_log.jsonl in
+# particular has to persist in git, not just locally, or its history would
+# reset to empty on every fresh CI checkout.
+reports/*
+!reports/model_leaderboard.md
+!reports/leaderboard_chart.png
+!reports/promotion_log.jsonl
 
 # Unit test / coverage reports
 htmlcov/

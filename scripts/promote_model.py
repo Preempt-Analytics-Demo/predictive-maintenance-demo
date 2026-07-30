@@ -48,8 +48,12 @@
 #   These are set automatically in CI from GitHub Secrets.
 #   Locally, source them from your .env file before running.
 
+import json
 import os
 import sys
+from datetime import datetime, timezone
+from pathlib import Path
+
 import click
 import mlflow
 from mlflow import MlflowClient
@@ -57,6 +61,30 @@ from mlflow import MlflowClient
 # f1_test at or above this is treated as too good to trust rather than an
 # unbeatable bar — see "GATE 1 SUSPECT-SCORE ESCAPE HATCH" above.
 SUSPECT_F1_THRESHOLD = 0.999
+
+# Every real promotion appends one line here — generate_leaderboard.py reads
+# it back to build the "Promotion history" table. Same append-only JSONL
+# pattern monitor.py already uses for monitor_log.jsonl, for the same reason:
+# a persistent, human-readable audit trail that survives container restarts.
+PROMOTION_LOG_PATH = Path(__file__).resolve().parent.parent / "reports" / "promotion_log.jsonl"
+
+
+def _log_promotion(
+    model_name: str, from_version: str | None, to_version: str,
+    from_f1: float | None, to_f1: float,
+) -> None:
+    """Append one promotion event. Called only when the alias actually moves."""
+    PROMOTION_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    entry = {
+        "timestamp":    datetime.now(timezone.utc).isoformat(),
+        "model_name":   model_name,
+        "from_version": from_version,   # None on a model's first-ever promotion
+        "to_version":   to_version,
+        "from_f1":      from_f1,        # None to match from_version
+        "to_f1":        to_f1,
+    }
+    with PROMOTION_LOG_PATH.open("a") as f:
+        f.write(json.dumps(entry) + "\n")
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -249,6 +277,7 @@ def main(model_name: str, min_f1: float | None, auto: bool) -> None:
         if prod_version and prod_f1 is not None:
             delta = new_f1 - prod_f1
             print(f"  F1 improvement: +{delta:.4f} ({prod_f1:.4f} -> {new_f1:.4f})")
+        _log_promotion(model_name, prod_version, latest_version, prod_f1, new_f1)
     else:
         print(f"  Decision: WOULD PROMOTE — version {latest_version} passes all gates.")
         print("  Run with --auto to actually move the @production alias.")

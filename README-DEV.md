@@ -395,6 +395,12 @@ It's also the mechanism `promote_model.py` and the retrain workflow depend on: w
 - The **Models** tab (Experiments tab → Models) shows both registered models (`predictive-maintenance-binary`, `predictive-maintenance-multiclass`) and their versions — the version currently carrying the `@production` alias is the one `api.py` actually serves.
 - `promote_model.py` automates the comparison you'd otherwise do by eye in that table: **Gate 1** requires the candidate's `f1_test` to beat the current `@production` version's; **Gate 2** requires it to clear an absolute floor (0.85 for binary, 0.60 for multiclass — multiclass tops out lower due to heavy class imbalance across six failure types). Both gates must pass before the alias moves.
 
+**No DagsHub access?** The MLflow UI itself is contributor-gated on DagsHub regardless of this repo's own visibility — per DagsHub's docs, only a repository contributor can open it. `scripts/generate_leaderboard.py` reads the same data via the MLflow API and writes it to [reports/model_leaderboard.md](reports/model_leaderboard.md): every registered version's `f1_test`, which one is `@production`, a chart, and promotion history. The retrain workflow regenerates and commits it automatically after every run, so it's always current and viewable on GitHub without a DagsHub account. Run it yourself with the same `MLFLOW_TRACKING_*` environment variables as `promote_model.py`:
+
+```bash
+python scripts/generate_leaderboard.py
+```
+
 ---
 
 ## Using DagsHub as a single source of truth

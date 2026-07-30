@@ -34,3 +34,6 @@ pyyaml==6.0.3             # provides `import yaml` for params.yaml reading
 # ── Drift monitoring ──────────────────────────────────────────────────────────
 evidently==0.7.21
 schedule==1.2.2           # drift monitor scheduling loop
+
+# ── Reporting ─────────────────────────────────────────────────────────────────
+matplotlib==3.10.9        # generate_leaderboard.py's f1_test-over-version chart

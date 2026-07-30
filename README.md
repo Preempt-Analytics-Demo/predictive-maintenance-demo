@@ -158,6 +158,8 @@ A new version that's merely "not worse" is not promoted. Neither is one that bea
 
 **Can I see this for myself?** The full comparison lives on <a id="ref-dagshub"></a>[DagsHub](#glossary-dagshub), the platform this project uses to store every training run behind the scenes. Browsing it yourself needs a DagsHub account with access to this project, so it isn't something every demo visitor can open — but you don't need to see it for any of this to work. The comparison runs automatically, every time, whether or not anyone ever looks at it.
 
+If you're curious anyway: **[reports/model_leaderboard.md](reports/model_leaderboard.md)** shows the same underlying numbers — every model version's score and which one is currently live — updated automatically after every retrain, viewable right here on GitHub with no account needed.
+
 ---
 
 ## Explore the prediction API

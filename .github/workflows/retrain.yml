@@ -105,6 +105,8 @@ jobs:
     # proceeding, matching the fail-open design one level higher up too.
     if: needs.check-rate-limit.outputs.proceed != 'false'
     runs-on: ubuntu-latest
+    permissions:
+      contents: write   # needed to commit the regenerated leaderboard back to main
 
     steps:
 
@@ -241,4 +243,36 @@ jobs:
             echo "  API_URL secret not set — reload the model manually:"
             echo "    curl -X POST http://127.0.0.1:8000/model/reload"
             echo "  Or restart the API: uvicorn src.api:app --reload"
+          fi
+
+      # Step 10 - Regenerate the public model leaderboard
+      # MLflow's own UI on DagsHub is contributor-gated regardless of whether
+      # this repo is public (see README) — generate_leaderboard.py reads the
+      # same MLflow data Step 8 just used and writes it out as a plain file
+      # anyone browsing this repo on GitHub can see. Runs every time, not just
+      # on promotion: dvc repro registers a new version whether or not it gets
+      # promoted, so the leaderboard is stale the moment a new version exists.
+      - name: Update model leaderboard
+        env:
+          MLFLOW_TRACKING_URI: ${{ secrets.MLFLOW_TRACKING_URI }}
+          MLFLOW_TRACKING_USERNAME: ${{ secrets.DAGSHUB_USERNAME }}
+          MLFLOW_TRACKING_PASSWORD: ${{ secrets.DAGSHUB_TOKEN }}
+        run: python scripts/generate_leaderboard.py
+
+      # Step 11 - Commit the leaderboard if it changed
+      # Only ever touches reports/ files — never retrain.trigger or the .dvc
+      # pointer — so this push can't re-trigger this same workflow (the
+      # on.push.paths filter above only watches retrain.trigger) or the
+      # docker-publish workflow (which only watches src/, scripts/, Dockerfile).
+      - name: Commit updated leaderboard
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add reports/model_leaderboard.md reports/leaderboard_chart.png
+          [ -f reports/promotion_log.jsonl ] && git add reports/promotion_log.jsonl
+          if git diff --cached --quiet; then
+            echo "Leaderboard unchanged — nothing to commit."
+          else
+            git commit -m "chore: update model leaderboard"
+            git push
           fi
