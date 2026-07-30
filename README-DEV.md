@@ -21,6 +21,7 @@ Predictive maintenance with a focus on MLOps — by Nate and Ivo.
 - [Automatic drift monitoring](#automatic-drift-monitoring)
 - [Running individual steps manually](#running-individual-steps-manually)
 - [GitHub Actions setup](#github-actions-setup)
+- [MLflow — tracking and comparing experiments](#mlflow--tracking-and-comparing-experiments)
 - [Using DagsHub as a single source of truth](#using-dagshub-as-a-single-source-of-truth)
 - [Team](#team)
 
@@ -360,6 +361,39 @@ Add them at: **GitHub repo → Settings → Secrets and variables → Actions �
 The workflow watches `retrain.trigger`, not `data/ai4i2020.parquet.dvc`. Only a push that updates `retrain.trigger` (i.e., drift was detected) fires the workflow. Data-accumulation pushes without drift leave `retrain.trigger` unchanged — no workflow runs.
 
 **Manual trigger:** Actions tab → "Retrain on new data" → "Run workflow" → select `main`
+
+---
+
+## MLflow — tracking and comparing experiments
+
+`dvc.yaml` defines 12 training stages — 6 model families (XGBoost, LightGBM, Random Forest, Logistic Regression, SVM, MLP) × 2 targets (binary, multiclass). Without a shared record, comparing them means digging through 12 sets of terminal output by hand. MLflow is what makes that comparison possible: every training run logs its hyperparameters, its evaluation metrics, and the model artifact itself to one place, so any two runs — or all twelve — can be compared side by side afterward, not just read once in whoever's terminal happened to run them.
+
+It's also the mechanism `promote_model.py` and the retrain workflow depend on: without a queryable metric history, "is the new model actually better?" would have to be a person's judgment call instead of an automated gate.
+
+**Where it runs:** this project doesn't self-host an MLflow server — DagsHub hosts one for every repo it manages, reachable at the `MLFLOW_TRACKING_URI` set in [First-time setup](#first-time-setup). The graphical interface is the **Experiments tab** on your DagsHub repo page (`dagshub.com/USERNAME/REPO` → Experiments).
+
+**How a run gets there:** every call to `modeling_pipeline.py --experiment <name>` opens one MLflow run under an experiment named `predictive-maintenance/<algorithm>/<binary|multiclass>` (e.g. `predictive-maintenance/xgboost/binary`), and logs:
+
+| Logged as | Examples |
+| --------- | -------- |
+| Params    | every hyperparameter passed to the model (tree depth, learning rate, regularisation, ...) |
+| Metrics   | `f1_test`, `f1_train`, `precision_test`, `recall_test`, `brier_score`, `overfit_delta` |
+| Tags      | `model_family`, `target_type`, `target`, `developer` |
+| Artifact  | the fitted model itself, registered as a new version of `predictive-maintenance-binary` or `predictive-maintenance-multiclass` |
+
+**Comparing runs in the UI:**
+
+1. Open the **Experiments** tab and pick an experiment (or view across all of them).
+2. The table view shows one row per run — every logged param and metric is a sortable column, so you can rank runs by `f1_test` directly, or spot which hyperparameter values correlate with better scores.
+3. Select two or more runs and click **Compare** for parallel-coordinates and scatter plots — useful for seeing how a hyperparameter change actually moved a metric, not just that it did.
+4. Click into a single run for its full metric list, logged artifacts, and tags.
+
+**Interpreting what you see:**
+
+- `f1_test` is the metric this project gates promotion on — it's the number `promote_model.py` reads to decide anything.
+- `overfit_delta` (`f1_train − f1_test`) flags overfitting at a glance: a large gap means the model memorised the training set better than it generalises.
+- The **Models** tab (Experiments tab → Models) shows both registered models (`predictive-maintenance-binary`, `predictive-maintenance-multiclass`) and their versions — the version currently carrying the `@production` alias is the one `api.py` actually serves.
+- `promote_model.py` automates the comparison you'd otherwise do by eye in that table: **Gate 1** requires the candidate's `f1_test` to beat the current `@production` version's; **Gate 2** requires it to clear an absolute floor (0.85 for binary, 0.60 for multiclass — multiclass tops out lower due to heavy class imbalance across six failure types). Both gates must pass before the alias moves.
 
 ---
 

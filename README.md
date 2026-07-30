@@ -141,6 +141,25 @@ You don't need to do anything — it's safe to just let it run.
 
 ---
 
+## What decides whether the new model actually goes live?
+
+You already read the short answer above: only if it's measurably more accurate. This section explains what "measurably more accurate" actually means, and where that measurement is kept.
+
+**The short version:** every time a new model finishes training, a tool called <a id="ref-mlflow"></a>[MLflow](#glossary-mlflow) writes down exactly how well it performed — automatically, with nothing for you to do. That written record is what gets compared against the model currently running, before anything is ever allowed to switch.
+
+**Why not just eyeball it?** Because eyeballing it means trusting a guess, and a system that predicts equipment failure isn't somewhere you want a guess. MLflow turns "is the new one actually better?" into a real, repeatable measurement — calculated the same way every single time — instead of a judgment call someone has to remember to make.
+
+**What gets measured:** how accurately each version predicts real failures on data it has never seen before. A new version only replaces the current one if **both** of these are true:
+
+- It scores higher than the model currently live.
+- It clears a minimum accuracy bar on its own, regardless of the comparison.
+
+A new version that's merely "not worse" is not promoted. Neither is one that beats the old model but still falls short of the safety floor.
+
+**Can I see this for myself?** The full comparison lives on <a id="ref-dagshub"></a>[DagsHub](#glossary-dagshub), the platform this project uses to store every training run behind the scenes. Browsing it yourself needs a DagsHub account with access to this project, so it isn't something every demo visitor can open — but you don't need to see it for any of this to work. The comparison runs automatically, every time, whether or not anyone ever looks at it.
+
+---
+
 ## Explore the prediction API
 
 The easiest way to see it working — one command, identical on every platform:
@@ -270,12 +289,14 @@ Plain-language explanations of the technical terms used above, for readers witho
 | <a id="glossary-api"></a>**API**                               | Application Programming Interface — the address (`http://localhost:8000`) this project's prediction service listens on. Other programs, including the simulation engine, send it data and get predictions back.&nbsp;&nbsp;\|&nbsp;&nbsp;[Go back](#ref-api)                                                                                     |
 | <a id="glossary-cnc-machine"></a>**CNC machine**               | Computer Numerical Control machine — factory equipment that shapes or cuts material automatically from programmed instructions. This project simulates sensor readings (temperature, speed, torque, etc.) from a CNC machine to predict when it might fail.&nbsp;&nbsp;\|&nbsp;&nbsp;[Go back](#ref-cnc-machine)                                 |
 | <a id="glossary-cli"></a>**Command Line Interface (CLI)**      | A text-based way of interacting with your computer by typing commands instead of clicking buttons — Terminal on Mac, PowerShell or CMD on Windows. All the commands in this README are typed into one of these.&nbsp;&nbsp;\|&nbsp;&nbsp;[Go back](#ref-cli)                                                                                     |
+| <a id="glossary-dagshub"></a>**DagsHub**                       | The website that hosts this project's training data and MLflow records behind the scenes — the machine-learning equivalent of GitHub. The automated pipeline reads from and writes to it; you don't need an account to run the demo.&nbsp;&nbsp;\|&nbsp;&nbsp;[Go back](#ref-dagshub)                                                            |
 | <a id="glossary-docker"></a>**Docker**                         | Software that packages an application together with everything it needs to run — code, libraries, settings — into a self-contained unit called a container, so it behaves identically on any machine. This project uses Docker so you don't need to install Python or any ML libraries yourself.&nbsp;&nbsp;\|&nbsp;&nbsp;[Go back](#ref-docker) |
 | <a id="glossary-drift"></a>**Drift**                           | A change in the statistical patterns of incoming data over time, compared to the data the ML model was trained on. If sensor readings start looking meaningfully different from what the model learned on, its predictions can no longer be trusted.&nbsp;&nbsp;\|&nbsp;&nbsp;[Go back](#ref-drift)                                              |
 | <a id="glossary-drift-detection"></a>**Drift detection**       | The automated check that compares recent sensor data to the model's original training data and flags whether drift (see above) has occurred.&nbsp;&nbsp;\|&nbsp;&nbsp;[Go back](#ref-drift-detection)                                                                                                                                            |
 | <a id="glossary-drift-report"></a>**Drift report**             | An HTML report generated by the drift detection step, showing which sensor features have shifted and by how much. Saved to `reports/drift_report.html` and opened automatically after a full retraining-loop run.&nbsp;&nbsp;\|&nbsp;&nbsp;[Go back](#ref-drift-report)                                                                          |
 | <a id="glossary-github"></a>**GitHub**                         | The website that hosts this project's code and version history, and — via GitHub Actions, below — runs the automated retraining workflow.&nbsp;&nbsp;\|&nbsp;&nbsp;[Go back](#ref-github)                                                                                                                                                        |
 | <a id="glossary-github-actions"></a>**GitHub Actions**         | GitHub's built-in automation feature. This project uses it to run the retraining workflow automatically whenever drift is detected and new data is pushed.&nbsp;&nbsp;\|&nbsp;&nbsp;[Go back](#ref-github-actions)                                                                                                                               |
+| <a id="glossary-mlflow"></a>**MLflow**                         | The tool that keeps a permanent record of every model version this project has ever trained — its settings, how accurate it was, and the finished model file itself. It's what lets the system compare a brand-new model against the one currently running before deciding whether to switch.&nbsp;&nbsp;\|&nbsp;&nbsp;[Go back](#ref-mlflow)  |
 | <a id="glossary-mlops"></a>**ML Ops (MLOps)**                  | Machine Learning Operations — the practice of automating and monitoring a machine learning model's full lifecycle in production (training, deployment, monitoring, retraining), rather than treating it as a one-off experiment.&nbsp;&nbsp;\|&nbsp;&nbsp;[Go back](#ref-mlops)                                                                  |
 | <a id="glossary-ml-pipeline"></a>**ML pipeline**               | The end-to-end sequence of automated steps that takes raw data all the way to a working, deployed model — here: generating sensor data, serving predictions, detecting drift, and retraining.&nbsp;&nbsp;\|&nbsp;&nbsp;[Go back](#ref-ml-pipeline)                                                                                               |
 | <a id="glossary-prediction-request"></a>**Prediction request** | A single message sent to the API containing one machine's sensor readings, asking "is this machine likely to fail?" The API responds with a prediction and a probability.&nbsp;&nbsp;\|&nbsp;&nbsp;[Go back](#ref-prediction-request)                                                                                                            |
