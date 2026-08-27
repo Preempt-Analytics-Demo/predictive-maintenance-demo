@@ -42,7 +42,11 @@ a real incident exposed a gap none of the existing rules caught: the training
 data's baseline partition had been silently overwritten with synthetic rows,
 inflating F1 to a suspicious 1.0. See the case study below — this is the strongest
 evidence yet for why systems thinking has to be a standing habit, not a one-time
-review.
+review. The same window closed with `9c6e31a`, which made the fixed pipeline's
+model comparisons visible to any visitor via a committed `reports/model_leaderboard.md`
+instead of MLflow's DagsHub UI, which is gated to repo contributors — turning the
+incident's resolution into something the whole team could verify, not just whoever
+fixed it.
 
 ---
 
@@ -61,8 +65,42 @@ review.
   Concretely on this project: naming the exact contract at risk (e.g. "this touches
   `feature_transformation.py`, check all three importers") gets a much more targeted
   response than "make sure nothing breaks."
+- **Structuring the ask.** Naming a role, the task, the relevant context, and the
+  expected output format up front gets a more targeted first draft than an
+  open-ended request — the same reason CLAUDE.md's contract tables (`Symbol | What
+  it controls | If changed without updating dependents`) work: the structure does
+  the disambiguating instead of a back-and-forth.
+- **Planning before building.** Sketching an approach first — and getting agreement
+  on it — avoids the dead ends that come from committing to a design three files in.
+  This matters most exactly where this project's biggest changes landed: the
+  12-stage DVC pipeline (`fec6e60`), Docker containerization touching four coupled
+  files at once (`ab8b4e2`), and the Gate 1 investigation that ultimately touched
+  three separate files for one root cause (see the case study below) — all
+  multi-file changes where committing to the wrong approach early is expensive to
+  unwind.
+- **Grounding with concrete examples.** Pointing at a specific number, commit, or
+  error ("UDI 1–10000 should read 3.39% failure rate, it's reading 19.48%") produces
+  a far more accurate fix than describing the symptom abstractly — this is what made
+  the Gate 1 investigation tractable in the first place.
+- **Providing assets.** A visual reference gives Claude something concrete to work
+  from or explain against, instead of inventing structure from a text description
+  alone. `images/Retraining Loop.png` and `reports/leaderboard_chart.png` are both
+  visuals the README and leaderboard explain rather than replace.
+- **Iterative fine-tuning.** Treat a prompt like an experiment: ship a first pass,
+  look at what actually came back, adjust, repeat. The repeated "Krug/Redish pass"
+  commits on the README (`8b046bb`, `672940b`, and others) are this pattern applied
+  to documentation — each pass was a targeted correction based on what the previous
+  pass actually produced, not a rewrite from scratch.
 
 ### AI Harness / Constitution Doc
+
+An **AI Harness** is a wrapper of explicit rules around what the AI is — and isn't —
+allowed to touch; `CLAUDE.md` is what that looks like concretely in this repo. Its
+rules function as **SOPs (Standard Operating Procedures)**: not general advice, but
+specific, repeatable procedures Claude follows the same way every time. We
+introduced them because Claude kept repeating the same category of mistake across
+sessions — a shared contract broken here, a downstream file forgotten there — and a
+verbal correction in one conversation doesn't carry over to the next.
 
 Writing project-specific rules into `CLAUDE.md` turned recurring verbal
 course-correction into a standing, reusable contract. Each rule in the file maps to
@@ -142,9 +180,44 @@ replace memorized CLI flags. The lesson: for a demo whose audience includes
 non-technical readers, documentation quality is not a one-off task — it needs the
 same iterate-and-review treatment as code.
 
+### Handover Documents
+
+Documenting work as it happens — not reconstructing it after the fact — is what
+lets the next session, human or Claude, pick up context without re-deriving it.
+This shows up at two levels in the repo:
+
+- **System-level track records, updated automatically.** `reports/monitor_log.jsonl`
+  (one line per drift/retrain check, never overwritten) and
+  `reports/promotion_log.jsonl` (one line per real model promotion, added in
+  `9c6e31a`) are logs a human can `tail` or grep without reading any code to
+  understand what happened.
+- **Human-readable summaries built from those logs.** `9c6e31a` also added
+  `reports/model_leaderboard.md`, generated from MLflow after every retrain and
+  committed back to the repo — specifically because MLflow's own DagsHub UI is
+  gated to repo contributors, so a teammate or demo visitor without an account had
+  no way to see the same comparison `promote_model.py` was acting on. Turning a
+  track record into a handover artifact means making it visible to whoever needs
+  it next, not just to whoever generated it.
+- **This document and `CLAUDE.md` itself** are the project-level version of the same
+  idea: rather than re-explaining "why does the export script have a `--purge`
+  flag" or "why did we change Gate 1" in every new conversation, the reasoning is
+  written down once, and the next reader starts from it instead of from zero.
+
+The common thread: a handover document is only as useful as how current it is. A
+log updated automatically (the JSONL files) stays trustworthy by construction; a
+doc updated manually (this one, `CLAUDE.md`) stays trustworthy only if updating it
+is treated as part of finishing the work, not an optional extra step.
+
 ---
 
 ## Still Evolving
 
 This doc should be updated the next time a new standing rule gets added to
 `CLAUDE.md`, or the next time an incident teaches us something a rule didn't catch.
+
+One direction we haven't tried yet: everything in `CLAUDE.md` today is scoped to
+this one repo's contracts. A **global, user-level CLAUDE.md** — rules that are
+project-agnostic (e.g. always check runtime deps before committing, always name
+downstream consumers before touching a shared contract) — would let SOPs that
+turned out to generalize travel with us into the next project instead of being
+re-derived from scratch there too.
